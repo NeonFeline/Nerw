@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import h5py
@@ -75,18 +76,27 @@ from scipy.signal import butter, filtfilt
 
 CLASS_IDS = {
     "background": 0,
+    # ordinary traffic and nuisance
     "train": 1,
     "road_vehicle": 2,
     "footsteps": 3,
-    "digging": 4,
-    "burst": 5,
-    "wheel_flat": 6,
+    "burst": 4,
+    "wheel_flat": 5,
+    # activity a trackside security system is asked to flag.  These are
+    # *activity* classes, not intent: DAS resolves what is being done and
+    # where, never who is doing it or why.
+    "digging": 6,
+    "cable_cut": 7,
+    "track_tamper": 8,
+    "fence_cut": 9,
+    "vehicle_stop": 10,
 }
+SECURITY_CLASSES = ("digging", "cable_cut", "track_tamper", "fence_cut", "vehicle_stop")
 CLASS_NAMES = {v: k for k, v in CLASS_IDS.items()}
 IGNORE_ID = 255
 
-MOVING_KINDS = ("train", "wheel_flat", "road_vehicle", "walker")
-STATIC_KINDS = ("static", "burst")
+MOVING_KINDS = ("train", "wheel_flat", "road_vehicle", "walker", "vehicle_stop", "fence_cut")
+STATIC_KINDS = ("static", "burst", "cable_cut", "track_tamper")
 
 _DEVICE: torch.device | None = None
 
@@ -128,28 +138,45 @@ def _phase_velocity(freqs, cfg):
 
 
 def _attenuation(freqs, cfg):
-    power = float(cfg.get("attenuation_power", 0.6))
+    """Amplitude attenuation coefficient ``alpha(f)`` in 1/m.
+
+    With ``damping_ratio`` set, attenuation follows hysteretic material
+    damping, ``alpha = pi f D / c(f)`` -- the standard soil model, linear in
+    frequency.  A damping ratio of 0.02-0.06 puts a 50 Hz surface wave 20 dB
+    down within tens of metres, which is what keeps an event's footprint on
+    its own stretch of fibre instead of smearing it over the whole array.
+    The explicit ``attenuation`` coefficient is the fallback.
+    """
+    f = np.maximum(np.asarray(freqs, np.float64), 1e-2)
+    damping = cfg.get("damping_ratio")
+    if damping:
+        return np.pi * f * float(damping) / _phase_velocity(f, cfg)
+    power = float(cfg.get("attenuation_power", 1.0))
     f_ref = float(cfg.get("attenuation_ref_freq", 50.0))
-    f = np.maximum(np.asarray(freqs, np.float64), 1.0)
-    return float(cfg["attenuation"]) * (f / f_ref) ** power
+    return float(cfg["attenuation"]) * (np.maximum(f, 1.0) / f_ref) ** power
+
+
+def band_centres(n_bands: int, f_lo: float, f_hi: float) -> np.ndarray:
+    if n_bands == 1:
+        return np.array([np.sqrt(f_lo * f_hi)])
+    return np.geomspace(f_lo, f_hi, n_bands)
+
+
+def _band_spec(cfg) -> tuple[int, float, float]:
+    fs = float(cfg["fs"])
+    return (max(1, int(cfg.get("propagation_bands", 12))),
+            float(cfg.get("band_fmin", 0.5)),
+            float(cfg.get("band_fmax", 0.5 * fs)))
 
 
 def band_plan(cfg):
     """Band centre frequencies, slownesses and attenuations of the operator."""
-    fs = float(cfg["fs"])
-    n_bands = max(1, int(cfg.get("propagation_bands", 12)))
-    f_lo = float(cfg.get("band_fmin", 0.5))
-    f_hi = float(cfg.get("band_fmax", 0.5 * fs))
-    if n_bands == 1:
-        centres = np.array([np.sqrt(f_lo * f_hi)])
-    else:
-        centres = np.geomspace(f_lo, f_hi, n_bands)
+    centres = band_centres(*_band_spec(cfg))
     return centres, 1.0 / _phase_velocity(centres, cfg), _attenuation(centres, cfg)
 
 
-def band_weights(freqs, cfg) -> np.ndarray:
+def _band_weights(freqs, centres) -> np.ndarray:
     """``(n_bands, n_freqs)`` partition of unity: ``sum_b B_b(f) == 1``."""
-    centres, _, _ = band_plan(cfg)
     freqs = np.asarray(freqs, np.float64)
     n = centres.size
     out = np.zeros((n, freqs.size), np.float64)
@@ -166,6 +193,27 @@ def band_weights(freqs, cfg) -> np.ndarray:
     out[k, idx] += 1.0 - upper
     out[k + 1, idx] += upper
     return out
+
+
+@lru_cache(maxsize=64)
+def _weights_on_rfft_grid(n_freqs, fs, n_bands, f_lo, f_hi) -> np.ndarray:
+    grid = np.fft.rfftfreq((n_freqs - 1) * 2, 1.0 / fs)
+    return _band_weights(grid, band_centres(n_bands, f_lo, f_hi))
+
+
+def band_weights(freqs, cfg) -> np.ndarray:
+    """``(n_bands, n_freqs)`` partition of unity, cached on the rfft grid.
+
+    The weights depend only on the band edges and the frequency grid, never on
+    the medium, so every propagation on the same grid reuses one array instead
+    of rebuilding it -- and copying the grid back off the GPU -- per chunk.
+    """
+    freqs = np.asarray(freqs, np.float64)
+    fs = float(cfg["fs"])
+    grid = np.fft.rfftfreq((freqs.size - 1) * 2, 1.0 / fs)
+    if freqs.size > 1 and grid.size == freqs.size and np.allclose(grid, freqs):
+        return _weights_on_rfft_grid(freqs.size, fs, *_band_spec(cfg))
+    return _band_weights(freqs, band_centres(*_band_spec(cfg)))
 
 
 def band_pad(cfg) -> int:
@@ -192,7 +240,10 @@ def _range_response(freqs_t, r_t, cfg, spreading=True, attenuation=True) -> torc
             mag = mag * torch.exp(-float(att[b]) * r_col)
         out += torch.polar(mag.contiguous(), angle)
     if spreading:
-        out = out / torch.sqrt(torch.clamp(r_col, min=float(cfg["near_field"])))
+        # 0.5 is a surface wave spreading on a half-space; a guided path along
+        # the rail sets 0.0 and does not spread at all.
+        power = float(cfg.get("spreading_power", 0.5))
+        out = out / torch.clamp(r_col, min=float(cfg["near_field"])) ** power
     return out
 
 
@@ -304,7 +355,8 @@ def _gather_linear(buffer: torch.Tensor, index: torch.Tensor, clamp=False) -> to
     return torch.where(valid, out, torch.zeros((), device=index.device))
 
 
-def _retarded(track_t, vel_t, px, y2z2, slowness, att, near, focus, fs, nt, coarse):
+def _retarded(track_t, vel_t, px, y2z2, slowness, att, near, spreading, focus, fs, nt,
+              coarse):
     """Retarded time and amplitude of a moving source at tap positions ``px``.
 
     Solves ``tau = t - r(tau) * slowness`` by fixed-point iteration.  The
@@ -333,7 +385,7 @@ def _retarded(track_t, vel_t, px, y2z2, slowness, att, near, focus, fs, nt, coar
     # dt/dtau = 1 + dr/dtau * slowness; the reciprocal is the Doppler factor.
     drdtau = (s_tau - px_col) * v_tau / torch.clamp(r, min=1e-6)
     jac = 1.0 / torch.clamp(1.0 + drdtau * slowness, min=0.5, max=2.0)
-    gain = torch.exp(-att * r) / torch.sqrt(torch.clamp(r, min=near))
+    gain = torch.exp(-att * r) / torch.clamp(r, min=near) ** spreading
     if focus:
         gain = gain * (jac**focus)
 
@@ -362,6 +414,7 @@ def moving_field(cfg, tap_pos, track, velocity, waveform, y, z, oversample=8, ou
     coarse = max(1, int(round(fs * float(cfg.get("geometry_step", 0.01)))))
     focus = float(cfg.get("doppler_focus", 1.0))
     near = float(cfg["near_field"])
+    spreading = float(cfg.get("spreading_power", 0.5))
 
     if out is None:
         out = torch.zeros((len(tap_pos), nt), dtype=torch.float32, device=device())
@@ -372,7 +425,7 @@ def moving_field(cfg, tap_pos, track, velocity, waveform, y, z, oversample=8, ou
         for b in range(centres.size):
             tau, gain = _retarded(
                 track_t, vel_t, px, y2z2, float(slow[b]), float(att[b]),
-                near, focus, fs, nt, coarse,
+                near, spreading, focus, fs, nt, coarse,
             )
             block += _gather_linear(bands[b], tau * (fs * oversample)) * gain
     return out
@@ -500,6 +553,90 @@ def _digging_wavelet(nt, fs, rng, ev):
     return w
 
 
+def _grinder_wavelet(nt, fs, rng, ev):
+    """Angle grinder or hacksaw on a cable, duct or lock.
+
+    A strong tonal fundamental with harmonics that wander as the blade loads
+    and unloads, plus broadband grit, gated into cutting bursts separated by
+    repositioning pauses.  The tonality and the duty cycle are what separate it
+    from digging, which is impulsive and aperiodic.
+    """
+    f0 = float(ev.get("f0", 220.0))
+    wobble = 1.0 + 0.04 * _shaped_noise(nt, fs, rng, exponent=2.0, fmin=0.2, fmax=6.0)
+    phase = 2.0 * np.pi * np.cumsum(f0 * wobble) / fs
+    w = np.zeros(nt, np.float32)
+    for k, amp in enumerate((1.0, 0.6, 0.35, 0.2, 0.1), start=1):
+        if k * f0 < 0.45 * fs:
+            w += amp * np.sin(k * phase + rng.uniform(0.0, 2 * np.pi)).astype(np.float32)
+    grit_hi = min(0.45 * fs, 3.0 * f0)
+    if grit_hi > 0.6 * f0:
+        w += float(ev.get("grit", 0.6)) * _band_noise(nt, fs, rng, 0.6 * f0, grit_hi)
+
+    gate = np.zeros(nt, np.float32)
+    ramp = max(int(0.05 * fs), 1)
+    t = float(ev["t_start"])
+    while t < ev["t_end"]:
+        span = rng.uniform(*ev.get("burst_seconds", (0.8, 4.0)))
+        i0, i1 = int(t * fs), int(min(t + span, ev["t_end"]) * fs)
+        n = min(i1, nt) - i0
+        if n > 0:
+            edge = np.minimum(np.arange(n), n - 1 - np.arange(n)) / ramp
+            gate[i0 : i0 + n] = np.clip(edge, 0.0, 1.0)
+        t += span + rng.uniform(*ev.get("gap_seconds", (0.5, 3.0)))
+    return (w * gate).astype(np.float32)
+
+
+def _hammer_wavelet(nt, fs, rng, ev):
+    """Metal-on-metal blows: levering clips, driving a chisel, unbolting rail."""
+    w = np.zeros(nt, np.float32)
+    t = float(ev["t_start"])
+    while t < ev["t_end"]:
+        f0 = float(ev.get("f0", 160.0)) * rng.uniform(0.7, 1.4)
+        hit = _ricker(f0, fs, max(0.01, 2.0 / f0))
+        i = int(round(t * fs))
+        j = min(hit.size, nt - i)
+        if 0 <= i < nt and j > 0:
+            w[i : i + j] += rng.uniform(0.5, 1.6) * hit[:j]
+        t += (1.0 / float(ev["rate"])) * max(0.15, 1.0 + 0.3 * rng.standard_normal())
+    return w
+
+
+def _snip_wavelet(nt, fs, rng, ev):
+    """Bolt croppers on a fence line: sparse, sharp, each with a short ring."""
+    w = np.zeros(nt, np.float32)
+    t = float(ev["t_start"])
+    rate = float(ev["rate"])
+    while t < ev["t_end"]:
+        f0 = rng.uniform(*ev.get("f0_range", (180.0, 450.0)))
+        hit = _ricker(f0, fs, max(0.008, 2.0 / f0))
+        i = int(round(t * fs))
+        j = min(hit.size, nt - i)
+        if 0 <= i < nt and j > 0:
+            w[i : i + j] += rng.uniform(0.5, 1.5) * hit[:j]
+            n = min(int(rng.uniform(0.02, 0.12) * fs), nt - i)
+            if n > 4:
+                ring = np.exp(-np.linspace(0.0, 5.0, n)) * np.sin(
+                    2 * np.pi * rng.uniform(300.0, 900.0) * np.arange(n) / fs
+                )
+                w[i : i + n] += (0.3 * ring).astype(np.float32)
+        t += rng.exponential(1.0 / rate) if rate > 0 else ev["t_end"]
+    return w
+
+
+def _idle_wavelet(nt, fs, rng, ev, from_sample):
+    """Engine idling after the vehicle has stopped."""
+    t = np.arange(nt) / fs
+    f0 = float(ev.get("idle_f0", 22.0)) * rng.uniform(0.85, 1.15)
+    w = np.zeros(nt, np.float32)
+    for k, amp in enumerate((1.0, 0.5, 0.25), start=1):
+        w += amp * np.sin(2 * np.pi * k * f0 * t + rng.uniform(0.0, 2 * np.pi)).astype(np.float32)
+    w *= 1.0 + 0.2 * _shaped_noise(nt, fs, rng, exponent=2.0, fmin=0.1, fmax=3.0)
+    gate = np.zeros(nt, np.float32)
+    gate[from_sample:] = 1.0
+    gate = gaussian_filter1d(gate, max(fs * 0.2, 1.0))
+    return (float(ev.get("idle_amp", 0.4)) * w * gate).astype(np.float32)
+
+
 def _burst_wavelet(nt, fs, rng, ev):
     n = min(int(ev["duration"] * fs), nt)
     w = _band_noise(nt, fs, rng, ev["fmin"], ev["fmax"])
@@ -549,13 +686,22 @@ def cable_site(nch, rng, dead_fraction=0.02, noisy_fraction=0.015):
     return coupling, noise_gain, sorted(set(dead)), sorted(set(noisy))
 
 
-def _position_track(nt, fs, rng, x0, speed, jitter):
-    """Source position and velocity with a slowly drifting speed."""
+def _position_track(nt, fs, rng, x0, speed, jitter, brake=None):
+    """Source position and velocity with a slowly drifting speed.
+
+    ``brake`` is ``(t_start, t_stop)``: the speed ramps linearly to zero
+    between them and stays there, which is what a vehicle pulling up beside the
+    track looks like -- a ridge that bends over and becomes a vertical line.
+    """
     if not jitter:
         v = np.full(nt, float(speed), np.float64)
     else:
         w = _shaped_noise(nt, fs, rng, exponent=2.0, fmin=0.02, fmax=0.3)
         v = speed * (1.0 + float(jitter) * w)
+    if brake:
+        t0, t1 = float(brake[0]), float(brake[1])
+        t = np.arange(nt) / fs
+        v = v * np.clip((t1 - t) / max(t1 - t0, 1e-6), 0.0, 1.0)
     x = x0 + np.concatenate([[0.0], np.cumsum(v[:-1])]) / fs
     return x.astype(np.float64), v.astype(np.float64)
 
@@ -567,18 +713,37 @@ def _coda_spec(fs, rng, strength=0.3, taps=2):
     ]
 
 
+def _gaussian_blur_channels(field: torch.Tensor, sigma: float) -> torch.Tensor:
+    """Gaussian smoothing along the channel axis, as scipy would, on the GPU."""
+    radius = int(4.0 * sigma + 0.5)
+    if radius < 1:
+        return field
+    offsets = torch.arange(-radius, radius + 1, device=field.device, dtype=field.dtype)
+    kernel = torch.exp(-0.5 * (offsets / sigma) ** 2)
+    kernel = (kernel / kernel.sum()).reshape(1, 1, -1)
+    # scipy's default edge mode is symmetric (it repeats the edge sample);
+    # torch's "reflect" skips it, so build the padding by hand and stay
+    # numerically interchangeable with the scipy version this replaced.
+    columns = field.t().unsqueeze(1)
+    head = torch.flip(columns[..., :radius], dims=[-1])
+    tail = torch.flip(columns[..., -radius:], dims=[-1])
+    padded = torch.cat([head, columns, tail], dim=-1)
+    return torch.nn.functional.conv1d(padded, kernel).squeeze(1).t()
+
+
 def _apply_coda(field, spec):
     """Delayed, attenuated and channel-diffused copies: scattering coda."""
     if not spec:
         return field
-    nt = field.shape[1]
-    out = field
+    tensor = field if isinstance(field, torch.Tensor) else _t(field)
+    nt = tensor.shape[1]
+    out = tensor
     for delay, amp, sigma in spec:
         if 0 < delay < nt:
-            blurred = gaussian_filter1d(field, sigma=sigma, axis=0)
-            out = out.copy()
+            blurred = _gaussian_blur_channels(tensor, sigma)
+            out = out.clone() if out is tensor else out
             out[:, delay:] += amp * blurred[:, :-delay]
-    return out
+    return out if isinstance(field, torch.Tensor) else _np(out)
 
 
 def _gauge_spatial(field, cfg):
@@ -601,9 +766,32 @@ def _gauge_spatial(field, cfg):
     return (shift(half) - shift(-half)) / gauge
 
 
-def _instrument_noise(nch, nt, fs, rng, cfg, exponent):
+def _knee_noise_multi(nch, nt, fs, rng, knee, slope, fmin, fmax):
+    """White above ``knee``, rising as ``f**-slope`` in power below it.
+
+    A strain-*rate* product is a differentiated phase, so its noise is close to
+    flat over the working band with a 1/f knee a few Hz down -- not a 1/f ramp
+    running to DC.  Shaping it as an unbounded ramp buries every event under
+    drift: at 1/f^1.6 from 0.03 Hz, 91% of the background variance landed below
+    1 Hz and a broadband energy detector scored exactly chance.
+    """
+    freqs = np.fft.rfftfreq(nt, 1.0 / fs)
+    f = np.maximum(freqs, fmin)
+    shape = np.sqrt(1.0 + (float(knee) / f) ** float(slope))
+    shape[(freqs < fmin) | (freqs > fmax)] = 0.0
+    white = _t(rng.standard_normal((nch, nt)))
+    y = torch.fft.irfft(torch.fft.rfft(white, n=nt, dim=1) * _t(shape), n=nt, dim=1)
+    y = y - y.mean(dim=1, keepdim=True)
+    return _np(y / torch.clamp(y.std(dim=1, keepdim=True), min=1e-12))
+
+
+def _instrument_noise(nch, nt, fs, rng, cfg, slope):
     """Optical phase noise: spatially correlated along the fibre, then gauged."""
-    field = _shaped_noise_multi(nch, nt, fs, rng, exponent=exponent, fmin=0.03, fmax=0.5 * fs)
+    field = _knee_noise_multi(
+        nch, nt, fs, rng,
+        knee=float(cfg.get("noise_knee_hz", 3.0)), slope=slope,
+        fmin=float(cfg.get("noise_fmin_hz", 0.05)), fmax=0.5 * fs,
+    )
     sigma = float(cfg.get("noise_correlation_m", 2.0)) / max(float(cfg["channel_spacing"]), 1e-6)
     if sigma > 0.05:
         field = gaussian_filter1d(field, sigma, axis=0, mode="nearest")
@@ -626,8 +814,8 @@ BACKGROUND_DEFAULTS = {
     "noise_pink": 0.09,
     "noise_white": 0.03,
     "noise_common": 0.04,
-    "drift": 0.03,
-    "microseism": 0.20,
+    "drift": 0.015,
+    "microseism": 0.06,
     "hum": 0.015,
     "ambient_sources": 8,
     "ambient_level": 0.10,
@@ -652,7 +840,7 @@ def make_background(cfg, rng, rng_transient, ch_pos, coupling, noise_gain, env_d
     gust = 1.0 + add["gust"] * _shaped_noise(nt, fs, rng, exponent=2.0, fmin=0.01, fmax=0.3)
     gust = np.clip(gust, 0.15, 3.0).astype(np.float32)
 
-    pink = _instrument_noise(nch, nt, fs, rng, cfg, 1.6)
+    pink = _instrument_noise(nch, nt, fs, rng, cfg, 2.0)
     white = _instrument_noise(nch, nt, fs, rng, cfg, 0.0)
     common = _shaped_noise(nt, fs, rng, exponent=1.5, fmin=0.02, fmax=30.0)
     drift = _shaped_noise(nt, fs, rng, exponent=2.0, fmin=0.005, fmax=0.5)
@@ -788,16 +976,28 @@ def signal_envelope(field, cfg, env_decim):
     """Decimated RMS envelope of ``field`` above the drift band.
 
     Labels, SNR calibration and the validator all measure through this one
-    recipe, so "6 dB above background" means the same thing everywhere.
+    recipe, so "6 dB above background" means the same thing everywhere.  The
+    high-pass is a zero-phase brick wall in the frequency domain rather than a
+    Butterworth ``filtfilt``: same job, but on the GPU and without the float64
+    IIR pass that dominated generation time.
     """
     fs = float(cfg["fs"])
-    b, a = butter(2, max(1.0, 0.002 * fs) / (fs / 2), btype="high")
-    x = filtfilt(b, a, np.asarray(field, np.float64), axis=1)
+    x = _t(field)
+    nt = x.shape[1]
+    corner = max(1.0, 0.002 * fs)
+    freqs = torch.fft.rfftfreq(nt, 1.0 / fs, device=x.device)
+    spec = torch.fft.rfft(x, n=nt, dim=1)
+    spec = spec * (freqs >= corner)
+    x = torch.fft.irfft(spec, n=nt, dim=1)
+
     win = max(1, int(round(float(cfg.get("envelope_window", 0.2)) * fs)))
-    # the running sum can land a few ulp below zero wherever the field is
-    # identically zero, which sqrt turns into NaN
-    energy = np.maximum(uniform_filter1d(x * x, size=win, axis=1, mode="nearest"), 0.0)
-    return np.sqrt(energy[:, ::env_decim]).astype(np.float32)
+    energy = torch.nn.functional.avg_pool1d(
+        torch.nn.functional.pad(
+            (x * x).unsqueeze(1), (win // 2, win - 1 - win // 2), mode="replicate"
+        ),
+        kernel_size=win, stride=1,
+    ).squeeze(1)
+    return _np(torch.sqrt(torch.clamp(energy[:, ::env_decim], min=0.0))).astype(np.float32)
 
 
 def build_labels(event_env, event_classes, background_env, transient, cfg, nt, env_decim):  # noqa: PLR0913
@@ -911,6 +1111,34 @@ def default_scenario(cfg=None):
             "x": 60.0, "y": 8.0, "z": 0.2, "t_start": 12.0, "duration": 2.5,
             "snr_db": 7.0, "fmin": 100.0, "fmax": 450.0,
         },
+        {
+            "kind": "cable_cut", "class": "cable_cut", "id": "cut0",
+            "x": 150.0, "y": 1.0, "z": 0.3, "t_start": 4.0, "t_end": 18.0,
+            "snr_db": 12.0, "f0": 240.0, "grit": 0.6,
+            "burst_seconds": [1.0, 3.5], "gap_seconds": [0.8, 2.5],
+        },
+        {
+            "kind": "track_tamper", "class": "track_tamper", "id": "tamper0",
+            "x": 200.0, "y": 3.0, "z": 0.2, "t_start": 6.0, "t_end": 20.0,
+            "snr_db": 16.0, "f0": 170.0, "rate": 1.6,
+            "paths": [
+                {"weight": 1.0},
+                {"weight": 0.35, "medium": {"wave_speed": 2600.0, "damping_ratio": 0.05,
+                                            "dispersion": 0.0, "spreading_power": 0.1}},
+            ],
+        },
+        {
+            "kind": "fence_cut", "class": "fence_cut", "id": "fence0",
+            "x0": 95.0, "speed": 0.25, "t_start": 8.0, "t_end": 26.0,
+            "y": 4.0, "z": 0.3, "rate": 0.7, "snr_db": 8.0, "speed_jitter": 0.0,
+        },
+        {
+            "kind": "vehicle_stop", "class": "vehicle_stop", "id": "stop0",
+            "x0": 420.0, "speed": -12.0, "y": 9.0, "z": 0.7, "snr_db": 14.0,
+            "t_brake": 14.0, "t_stop": 19.0, "length": 5.0,
+            "fmin": 6.0, "fmax": 110.0, "engine_f0": 40.0, "engine_amp": 0.3,
+            "idle_f0": 22.0, "idle_amp": 0.5, "qs_ratio": 0.15,
+        },
     ]
 
 
@@ -927,6 +1155,81 @@ def _event_rng(cfg, event, index):
     return np.random.default_rng(np.random.SeedSequence(entropy))
 
 
+def event_paths(cfg, ev):
+    """The propagation paths one event radiates along.
+
+    Ordinary sources have a single ground path.  Anything striking the rail
+    also feeds a guided path: steel carries the blow at kilometres per second
+    with almost no loss and no geometric spreading, so it arrives along a
+    near-vertical moveout hundreds of metres away while the ground arrival is
+    still confined to tens of metres.  That contrast is the most distinctive
+    thing about tampering with the track, and it costs one extra propagation.
+    """
+    paths = ev.get("paths")
+    if not paths:
+        return [(1.0, cfg)]
+    return [(float(p.get("weight", 1.0)), {**cfg, **p.get("medium", {})}) for p in paths]
+
+
+def _moving_sources(cfg, ev, rng, nt, fs):
+    """``(offset, waveform)`` pairs and the trajectory for a moving event."""
+    kind = ev["kind"]
+    brake = None
+    if kind == "walker":
+        return [(0.0, _footstep_wavelet(nt, fs, rng, ev))], brake
+    if kind == "fence_cut":
+        return [(0.0, _snip_wavelet(nt, fs, rng, ev))], brake
+
+    offsets = ev.get("axle_offsets")
+    if offsets is None:
+        n = max(1, int(round(ev["length"] / 2.5)))
+        offsets = [2.5 * i for i in range(n)]
+    if kind == "vehicle_stop":
+        brake = (float(ev["t_brake"]), float(ev["t_stop"]))
+
+    sources = []
+    for k, offset in enumerate(offsets):
+        w = _axle_wavelet(
+            nt, fs, rng, ev["fmin"], ev["fmax"],
+            f0=ev.get("f0", 55.0), rumble=ev.get("rumble", 0.22),
+        )
+        if kind in ("road_vehicle", "vehicle_stop"):
+            w = w + _engine_wavelet(nt, fs, rng, ev.get("engine_f0", 45.0),
+                                    ev.get("engine_amp", 0.27))
+        if kind == "wheel_flat" and k == 0:
+            w = w + _flat_impulses(nt, fs, rng, ev.get("wheel_period", 0.2),
+                                   ev.get("flat_amp", 0.25))
+        if kind == "vehicle_stop":
+            # rolling and engine noise die with the motion; the idle does not
+            stop = int(min(float(ev["t_stop"]), cfg["duration"]) * fs)
+            fade = np.ones(nt, np.float32)
+            fade[stop:] = 0.0
+            w = w * gaussian_filter1d(fade, max(fs * 0.3, 1.0))
+            if k == 0:
+                w = w + _idle_wavelet(nt, fs, rng, ev, stop)
+        sources.append((float(offset), w.astype(np.float32)))
+
+    if ev.get("qs_ratio"):
+        sources.append((
+            0.5 * (max(offsets) + min(offsets)),
+            (float(ev["qs_ratio"]) * _band_noise(nt, fs, rng, 0.3, 1.5)).astype(np.float32),
+        ))
+    return sources, brake
+
+
+def _static_waveform(cfg, ev, rng, nt, fs):
+    kind = ev["kind"]
+    if kind == "static":
+        return _digging_wavelet(nt, fs, rng, ev)
+    if kind == "burst":
+        return _burst_wavelet(nt, fs, rng, ev)
+    if kind == "cable_cut":
+        return _grinder_wavelet(nt, fs, rng, ev)
+    if kind == "track_tamper":
+        return _hammer_wavelet(nt, fs, rng, ev)
+    raise ValueError(f"unknown static kind: {kind}")
+
+
 def _render_event(cfg, ev, ch_pos, rng, coupling):
     """Clean, unit-amplitude field of one event: ``(n_channels, nt)``."""
     fs = float(cfg["fs"])
@@ -934,54 +1237,37 @@ def _render_event(cfg, ev, ch_pos, rng, coupling):
     kind = ev["kind"]
     taps, gauged = gauge_taps(ch_pos, cfg)
     oversample = int(cfg.get("oversample", 8))
+    paths = event_paths(cfg, ev)
 
     if kind in MOVING_KINDS:
-        if kind == "walker":
-            sources = [(0.0, _footstep_wavelet(nt, fs, rng, ev))]
-        else:
-            offsets = ev.get("axle_offsets")
-            if offsets is None:
-                n = max(1, int(round(ev["length"] / 2.5)))
-                offsets = [2.5 * i for i in range(n)]
-            sources = []
-            for k, offset in enumerate(offsets):
-                w = _axle_wavelet(
-                    nt, fs, rng, ev["fmin"], ev["fmax"],
-                    f0=ev.get("f0", 55.0), rumble=ev.get("rumble", 0.22),
-                )
-                if kind == "road_vehicle":
-                    w = w + _engine_wavelet(nt, fs, rng, ev.get("engine_f0", 45.0),
-                                            ev.get("engine_amp", 0.27))
-                if kind == "wheel_flat" and k == 0:
-                    w = w + _flat_impulses(nt, fs, rng, ev.get("wheel_period", 0.2),
-                                           ev.get("flat_amp", 0.25))
-                sources.append((float(offset), w.astype(np.float32)))
-            if ev.get("qs_ratio"):
-                sources.append((
-                    0.5 * (max(offsets) + min(offsets)),
-                    (float(ev["qs_ratio"]) * _band_noise(nt, fs, rng, 0.3, 1.5)).astype(np.float32),
-                ))
+        sources, brake = _moving_sources(cfg, ev, rng, nt, fs)
         track, velocity = _position_track(
-            nt, fs, rng, ev["x0"], ev["speed"], ev.get("speed_jitter", 0.02)
+            nt, fs, rng, ev["x0"], ev["speed"], ev.get("speed_jitter", 0.02), brake=brake
         )
         direction = 1.0 if ev["speed"] >= 0 else -1.0
         acc = torch.zeros((len(taps), nt), dtype=torch.float32, device=device())
-        for offset, waveform in sources:
-            moving_field(
-                cfg, taps, track + direction * offset, velocity, waveform,
-                ev["y"], ev["z"], oversample=oversample, out=acc,
-            )
+        for weight, medium in paths:
+            part = torch.zeros_like(acc)
+            for offset, waveform in sources:
+                moving_field(
+                    medium, taps, track + direction * offset, velocity, waveform,
+                    ev["y"], ev["z"], oversample=oversample, out=part,
+                )
+            acc += weight * part
         field = _np(acc)
-        del acc
-        if kind == "walker":
+        del acc, part
+        if kind in ("walker", "fence_cut"):
             window = np.zeros(nt, np.float32)
             i0 = int(max(0, ev["t_start"] - 1.0) * fs)
             i1 = int(min(cfg["duration"], ev["t_end"] + 3.0) * fs)
             window[i0:i1] = 1.0
             field = field * window[None, :]
     elif kind in STATIC_KINDS:
-        waveform = _digging_wavelet(nt, fs, rng, ev) if kind == "static" else _burst_wavelet(nt, fs, rng, ev)
-        field = _propagate(waveform, cfg, taps - float(ev["x"]), ev["y"], ev["z"])
+        waveform = _static_waveform(cfg, ev, rng, nt, fs)
+        field = sum(
+            weight * _propagate(waveform, medium, taps - float(ev["x"]), ev["y"], ev["z"])
+            for weight, medium in paths
+        )
     else:
         raise ValueError(f"unknown event kind: {kind}")
 
@@ -1097,7 +1383,9 @@ def write_outputs(out_dir: Path, cfg, result, scenario, emit_components=True):
     nch = cfg["n_channels"]
     t0_ns = 1_700_000_000 * 10**9
     with h5py.File(h5_path, "w") as f:
-        f.create_dataset("traces", data=traces, compression="gzip", compression_opts=1)
+        # float32 strain rate is noise-like: gzip buys ~6% for 23x the write
+        # time.  The uint8 class mask is the opposite and stays compressed.
+        f.create_dataset("traces", data=traces)
         f.attrs["format"] = "miniDAS"
         f.attrs["version"] = "0.1.0-synthetic"
         f.attrs["data_units"] = "rad/s"
@@ -1119,10 +1407,8 @@ def write_outputs(out_dir: Path, cfg, result, scenario, emit_components=True):
 
     if emit_components:
         with h5py.File(out_dir / "components.h5", "w") as f:
-            f.create_dataset("signal", data=np.ascontiguousarray(result["signal"].T),
-                             compression="gzip", compression_opts=1)
-            f.create_dataset("background", data=np.ascontiguousarray(result["background"].T),
-                             compression="gzip", compression_opts=1)
+            f.create_dataset("signal", data=np.ascontiguousarray(result["signal"].T))
+            f.create_dataset("background", data=np.ascontiguousarray(result["background"].T))
             f.create_dataset("coupling", data=result["coupling"])
             f.create_dataset("event_snr_db", data=result["event_snr_db"],
                              compression="gzip", compression_opts=1)
@@ -1173,11 +1459,13 @@ def qa_plot(h5_path: Path, out_png: Path, ch_pos, cfg):
     axes[1].set_title("1-200 Hz band (events, ambient ridges, axle impulses)")
     fig.colorbar(im, ax=axes[1], label="dB")
 
-    shown = np.where(mask == IGNORE_ID, 7, mask).astype(np.uint8)
-    axes[2].imshow(shown.T, aspect="auto", origin="lower", extent=ext, cmap="tab10", vmin=0, vmax=9)
+    ignore_slot = max(CLASS_IDS.values()) + 1
+    shown = np.where(mask == IGNORE_ID, ignore_slot, mask).astype(np.uint8)
+    axes[2].imshow(shown.T, aspect="auto", origin="lower", extent=ext, cmap="tab20",
+                   vmin=0, vmax=19)
     axes[2].set_ylabel("distance (m)")
-    axes[2].set_title("class mask (1=train 2=vehicle 3=footsteps 4=digging 5=burst "
-                      "6=wheel_flat 7=ignore)")
+    axes[2].set_title("class mask: " + " ".join(
+        f"{v}={k}" for k, v in CLASS_IDS.items() if v) + f" {ignore_slot}=ignore")
 
     quiet = int(0.02 * traces.shape[1])
     loud = int(np.argmax(np.abs(traces).max(axis=0)))
@@ -1207,6 +1495,10 @@ def build_config(args) -> dict:
         "attenuation": args.attenuation,
         "attenuation_power": args.attenuation_power,
         "attenuation_ref_freq": 50.0,
+        "damping_ratio": args.damping_ratio,
+        "spreading_power": 0.5,
+        "noise_knee_hz": args.noise_knee,
+        "noise_fmin_hz": 0.05,
         "dispersion": args.dispersion,
         "dispersion_ref_freq": 20.0,
         "near_field": 2.0,
@@ -1235,10 +1527,16 @@ def add_common_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--channel-spacing", type=float, default=1.02)
     ap.add_argument("--gauge-length", type=float, default=10.0)
     ap.add_argument("--wave-speed", type=float, default=250.0)
-    ap.add_argument("--attenuation", type=float, default=2e-4)
+    ap.add_argument("--attenuation", type=float, default=2e-4,
+                    help="fallback alpha at 50 Hz, used only when --damping-ratio is 0")
+    ap.add_argument("--damping-ratio", type=float, default=0.03,
+                    help="soil damping ratio D; alpha(f) = pi f D / c(f). 0 falls back "
+                         "to --attenuation")
+    ap.add_argument("--noise-knee", type=float, default=3.0,
+                    help="Hz below which the instrument noise rises as 1/f^2")
     ap.add_argument("--dispersion", type=float, default=0.08,
                     help="exponent of c(f) = c0 (f/20)^-beta; 0 disables dispersion")
-    ap.add_argument("--attenuation-power", type=float, default=0.6)
+    ap.add_argument("--attenuation-power", type=float, default=1.0)
     ap.add_argument("--noise-correlation", type=float, default=2.0,
                     help="spatial correlation length (m) of the instrument noise field")
     ap.add_argument("--propagation-bands", type=int, default=12,

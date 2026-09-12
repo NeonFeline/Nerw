@@ -9,6 +9,8 @@
 data/**
 !data/**/
 !data/**/manifest.json
+# the showcase figure is a deliverable, not a generated dataset
+!data/showcase/*.png
 
 # Training artifacts (checkpoints, scores, logs)
 runs/
