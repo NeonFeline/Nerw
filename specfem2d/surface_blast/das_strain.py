@@ -146,9 +146,12 @@ def main():
     parser.add_argument("--gauge", type=float, default=4.0, help="gauge length L in metres")
     parser.add_argument("--rate", action="store_true", help="plot strain rate instead of strain")
     parser.add_argument("--clip", type=float, default=99.5, help="colour limit as a percentile of |value|")
-    parser.add_argument("--out", type=Path, help="figure path (default OUTPUT_FILES/das_strain_gather.png)")
+    parser.add_argument("--out", type=Path,
+                        help="figure path (default OUTPUT_FILES/das_strain_gather.png, or das_strain_rate_gather.png)")
     parser.add_argument("--show", action="store_true", help="also open the figure in a window")
     args = parser.parse_args()
+    if not args.show:
+        plt.switch_backend("Agg")  # only writing files: don't start a GUI toolkit
 
     x, t, ux = load_ux(args.run_dir)
     centres, strain = gauge_strain(ux, x, args.gauge)
@@ -159,7 +162,7 @@ def main():
     outdir = args.run_dir / "OUTPUT_FILES"
     np.savez(outdir / "das_strain.npz", x=centres, t=t, strain=strain, gauge_length=args.gauge,
              phase_rad=PHASE_PER_STRAIN_METRE * args.gauge * strain)
-    out = args.out or outdir / "das_strain_gather.png"
+    out = args.out or outdir / f"das_{quantity.lower().replace(' ', '_')}_gather.png"
     fig = plot_gather(centres, t, gather, f"DAS {quantity.lower()} gather, gauge length {args.gauge:g} m",
                       quantity, unit, read_source_x(args.run_dir / "DATA" / "SOURCE"), args.clip, out)
 

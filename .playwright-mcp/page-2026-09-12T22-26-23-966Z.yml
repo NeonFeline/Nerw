@@ -1,0 +1,6 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]
+  - generic [ref=e4]:
+    - heading "Sign in to view this page" [level=2] [ref=e8]
+    - link "Sign in" [ref=e10] [cursor=pointer]:
+      - /url: /login?returnTo=%2Fcode%2Fartifact%2Fc11b7400-e71d-40f4-b8ed-b68c14f3757b

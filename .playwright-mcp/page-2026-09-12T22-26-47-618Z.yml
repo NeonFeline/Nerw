@@ -1,0 +1,435 @@
+- generic [ref=f10e2]:
+  - banner [ref=f10e3]:
+    - generic [ref=f10e4]: Repository status Â· NeonFeline/Nerw
+    - heading "Synthetic DAS, end to end" [level=1] [ref=f10e5]
+    - paragraph [ref=f10e6]:
+      - text: Nerw generates physically-motivated synthetic strain-rate recordings for a railway fibre, builds a labelled dataset split by
+      - emphasis [ref=f10e7]: installation
+      - text: "rather than by random seed, and trains a self-supervised transformer to flag whatever doesn't look like background. This page is a snapshot of that pipeline: a real bug fixed today, the generator's own invariants, the dataset those invariants produced, and a CPU sanity check of the model running end to end."
+    - list [ref=f10e8]:
+      - listitem [ref=f10e9]:
+        - link "Pipeline" [ref=f10e10] [cursor=pointer]:
+          - /url: "#pipeline"
+      - listitem [ref=f10e11]:
+        - link "Exhibits" [ref=f10e12] [cursor=pointer]:
+          - /url: "#exhibits"
+      - listitem [ref=f10e13]:
+        - link "Dataset" [ref=f10e14] [cursor=pointer]:
+          - /url: "#dataset"
+      - listitem [ref=f10e15]:
+        - link "Model" [ref=f10e16] [cursor=pointer]:
+          - /url: "#model"
+      - listitem [ref=f10e17]:
+        - link "Sanity check" [ref=f10e18] [cursor=pointer]:
+          - /url: "#sanity"
+      - listitem [ref=f10e19]:
+        - link "Status" [ref=f10e20] [cursor=pointer]:
+          - /url: "#status"
+    - generic [ref=f10e21]:
+      - generic [ref=f10e22]:
+        - generic [ref=f10e23]: "6"
+        - generic [ref=f10e24]: site families â€” 4 train, 2 held out entirely
+      - generic [ref=f10e25]:
+        - generic [ref=f10e26]: "42"
+        - generic [ref=f10e27]: recordings in data/synthetic/v2 (503.6 s to build)
+      - generic [ref=f10e28]:
+        - generic [ref=f10e29]: "135"
+        - generic [ref=f10e30]: labelled events across every run's scenario
+      - generic [ref=f10e31]:
+        - generic [ref=f10e32]: 29/29
+        - generic [ref=f10e33]:
+          - code [ref=f10e34]: uv run pytest
+          - text: passing on this branch
+  - generic [ref=f10e35]:
+    - generic [ref=f10e36]: Mechanism
+    - heading "Generator â†’ dataset â†’ model â†’ score" [level=2] [ref=f10e37]
+    - paragraph [ref=f10e38]:
+      - text: Six files do the real work.
+      - code [ref=f10e39]: simulate_das.py
+      - text: knows nothing about site families or splits â€” it renders one scenario into one recording.
+      - code [ref=f10e40]: make_dataset.py
+      - text: is the only thing that samples families, writes the train/val/test layout, and records exactly how to reproduce it.
+    - figure [ref=f10e41]:
+      - 'img "Diagram: simulate_das.py renders one recording; make_dataset.py samples site families and writes data/split/family/run to disk with a manifest; model.data''s WindowDataset then discovers only the train/ subtree; VibrationTransformer trains with masked MSE and SIGReg; AnomalyDetector calibrates on background-only windows; evaluate.py and infer.py score new recordings. specfem2d/surface_blast independently cross-checks the gauge operator with a full elastic-wave solve." [ref=f10e42]':
+        - generic [ref=f10e44]: simulate_das.py
+        - generic [ref=f10e45]: shared band operator
+        - generic [ref=f10e46]: gauge diff Â· SNR labels
+        - generic [ref=f10e48]: make_dataset.py
+        - generic [ref=f10e49]: 6 site families
+        - generic [ref=f10e50]: random scenario per run
+        - generic [ref=f10e52]: data/<split>/<family>_NNN/
+        - generic [ref=f10e53]: das.h5 Â· components.h5
+        - generic [ref=f10e54]: labels.csv Â· manifest.json
+        - generic [ref=f10e55]: scenario
+        - generic [ref=f10e56]: write
+        - generic [ref=f10e58]: specfem2d/surface_blast
+        - generic [ref=f10e59]: full elastic-wave solve
+        - generic [ref=f10e60]: independent cross-check
+        - generic [ref=f10e62]: discover_recordings("train/")
+        - generic [ref=f10e64]: WindowDataset
+        - generic [ref=f10e65]: (channels, time)
+        - generic [ref=f10e66]: background-only filter
+        - generic [ref=f10e68]: VibrationTransformer
+        - generic [ref=f10e69]: masked MSE
+        - generic [ref=f10e70]: + SIGReg (LeJEPA)
+        - generic [ref=f10e72]: AnomalyDetector
+        - generic [ref=f10e73]: residual z + embedding z
+        - generic [ref=f10e74]: quantile threshold
+        - generic [ref=f10e76]: evaluate.py / infer.py
+        - generic [ref=f10e77]: ROC-AUC vs labels
+        - generic [ref=f10e78]: scores.npz
+        - generic [ref=f10e79]: windows
+        - generic [ref=f10e80]: checkpoint
+        - generic [ref=f10e81]: stats
+      - generic [ref=f10e82]:
+        - text: Physics generates one recording at a time;
+        - code [ref=f10e83]: make_dataset.py
+        - text: samples many scenarios per site family and writes the split to disk. The model only ever discovers recordings under
+        - code [ref=f10e84]: train/
+        - text: ", for both fitting and background calibration â€” the held-out families never enter that path."
+        - code [ref=f10e85]: specfem2d/surface_blast
+        - text: is a separate full elastic-wave solve, used to check the gauge-length differencing operator against something
+        - code [ref=f10e86]: simulate_das.py
+        - text: doesn't itself compute.
+  - generic [ref=f10e87]:
+    - generic [ref=f10e88]: Evidence
+    - heading "What the generator actually outputs" [level=2] [ref=f10e89]
+    - paragraph [ref=f10e90]:
+      - text: Two real recordings â€” not mockups. The first was rendered on this machine for this page; the second is a full SPECFEM2D solve already sitting in the (previously untracked)
+      - code [ref=f10e91]: specfem2d/surface_blast/
+      - text: directory.
+    - figure [ref=f10e93]:
+      - 'img "QA waterfall plot from simulate_das.py: raw and band-passed strain-rate over 20 s and 200 channels, the resulting class mask, and the per-channel power spectral density." [ref=f10e94]'
+      - generic [ref=f10e95]:
+        - text: SEED 7 Â· DURATION 20 s Â· CHANNELS 200 Â· FS 1000 Hz Â· SCENARIO default_scenario() â€” train, wheel_flat, road_vehicle, footsteps, digging, burst rendered fresh for this figure on CPU (
+        - code [ref=f10e96]: simulate_das.py --duration 20 --n-channels 200 --device cpu --seed 7
+        - text: ) â€” not part of
+        - code [ref=f10e97]: data/synthetic/v2
+        - text: ", which samples a new scenario per run instead (see Â§Dataset)."
+    - figure [ref=f10e99]:
+      - 'img "SPECFEM2D DAS strain gather: a chevron-shaped surface-wave moveout pattern radiating from a source at 50 metres, recorded by a 4-metre gauge-length fibre." [ref=f10e100]'
+      - generic [ref=f10e101]:
+        - text: "SOURCE explosive moment tensor, fâ‚€ 50 Hz Ricker, at the free surface (x=50 m) Â· FIBRE 1 m deep, x=10â€“90 m Â· GAUGE 4 m Â· DT 5Ã—10â\x81»â\x81µ s Â· NSTEP 8000"
+        - code [ref=f10e102]: specfem2d/surface_blast/run.sh
+        - text: meshes and solves with SPECFEM2D, then
+        - code [ref=f10e103]: das_strain.py
+        - text: differences the displacement at Â±gauge/2 into the same axial-strain quantity
+        - code [ref=f10e104]: simulate_das.py
+        - text: synthesizes kinematically.
+  - generic [ref=f10e105]:
+    - generic [ref=f10e106]: Dataset
+    - heading "data/synthetic/v2 â€” split by installation, not by seed" [level=2] [ref=f10e107]
+    - paragraph [ref=f10e108]:
+      - text: Within a family,
+      - code [ref=f10e109]: make_dataset.py
+      - text: "fixes the site â€” wave speed, attenuation, dispersion, gauge length, channel spacing, the mix of events that occur there â€” and randomizes everything else: which events occur, where, how fast, how far above the background they sit."
+      - code [ref=f10e110]: viaduct_hard
+      - text: and
+      - code [ref=f10e111]: peat_quiet
+      - text: are never sampled for training or validation; a model that scores well on them has generalized to an installation it has never seen, not memorized a seed.
+    - list [ref=f10e112]:
+      - listitem [ref=f10e113]: background
+      - listitem [ref=f10e115]: train
+      - listitem [ref=f10e117]: road_vehicle
+      - listitem [ref=f10e119]: footsteps
+      - listitem [ref=f10e121]: digging
+      - listitem [ref=f10e123]: burst
+      - listitem [ref=f10e125]: wheel_flat
+      - listitem [ref=f10e127]: ignore (255 â€” excluded from training & scoring)
+    - generic [ref=f10e129]:
+      - generic [ref=f10e130]:
+        - generic [ref=f10e131]:
+          - text: embankment_soft
+          - generic [ref=f10e132]: train
+        - 'generic "embankment_soft: background 77.1%, train 0.5%, road_vehicle 6.3%, footsteps 0.0%, digging 0.6%, burst 0.1%, wheel_flat 5.0%, ignore 10.5%" [ref=f10e133]'
+        - generic [ref=f10e142]: ignore 10.5%
+      - generic [ref=f10e143]:
+        - generic [ref=f10e144]:
+          - text: cutting_stiff
+          - generic [ref=f10e145]: train
+        - 'generic "cutting_stiff: background 49.5%, train 10.5%, road_vehicle 12.6%, footsteps 3.0%, digging 0.4%, burst 0.3%, wheel_flat 3.3%, ignore 20.5%" [ref=f10e146]'
+        - generic [ref=f10e155]: ignore 20.5%
+      - generic [ref=f10e156]:
+        - generic [ref=f10e157]:
+          - text: urban_fill
+          - generic [ref=f10e158]: train
+        - 'generic "urban_fill: background 66.0%, train 5.6%, road_vehicle 10.4%, footsteps 0.2%, digging 0.0%, burst 0.1%, wheel_flat 4.0%, ignore 13.7%" [ref=f10e159]'
+        - generic [ref=f10e167]: ignore 13.7%
+      - generic [ref=f10e168]:
+        - generic [ref=f10e169]:
+          - text: coastal_marsh
+          - generic [ref=f10e170]: train
+        - 'generic "coastal_marsh: background 81.1%, train 6.1%, road_vehicle 0.0%, footsteps 0.9%, digging 0.6%, burst 0.4%, wheel_flat 1.3%, ignore 9.6%" [ref=f10e171]'
+        - generic [ref=f10e179]: ignore 9.6%
+      - generic [ref=f10e180]:
+        - generic [ref=f10e181]:
+          - text: viaduct_hard
+          - generic [ref=f10e182]: holdout
+        - 'generic "viaduct_hard (held out): background 80.9%, train 5.5%, road_vehicle 0.4%, footsteps 0.8%, digging 0.0%, burst 0.8%, wheel_flat 1.7%, ignore 10.0%" [ref=f10e183]'
+        - generic [ref=f10e191]: ignore 10.0%
+      - generic [ref=f10e192]:
+        - generic [ref=f10e193]:
+          - text: peat_quiet
+          - generic [ref=f10e194]: holdout
+        - 'generic "peat_quiet (held out): background 65.3%, train 15.7%, road_vehicle 1.4%, footsteps 0.8%, digging 1.0%, burst 0.5%, wheel_flat 2.5%, ignore 12.9%" [ref=f10e195]'
+        - generic [ref=f10e204]: ignore 12.9%
+    - group [ref=f10e205]:
+      - generic "â–¸ Exact figures per family (%)" [ref=f10e206] [cursor=pointer]
+    - heading "Realized event SNR, by class" [level=3] [ref=f10e207]
+    - paragraph [ref=f10e208]:
+      - text: Amplitude is calibrated to a drawn SNR against the realized background, not a fixed constant â€”
+      - code [ref=f10e209]: make_dataset.py
+      - text: "samples every event's target from [2, 26] dB. Across all 135 events the realized values land close to that range:"
+    - figure [ref=f10e210]:
+      - img "Horizontal range chart of realized event SNR in decibels for six event classes. Train ranges 2.5 to 24.8 dB, mean 16.0, n=33. Road vehicle 2.3 to 24.8, mean 13.8, n=19. Footsteps 2.4 to 24.6, mean 12.3, n=22. Digging 3.1 to 24.4, mean 13.2, n=9. Burst 2.5 to 24.9, mean 13.1, n=32. Wheel flat 3.5 to 23.6, mean 14.1, n=20." [ref=f10e211]:
+        - generic [ref=f10e212]:
+          - generic [ref=f10e213]: "0"
+          - generic [ref=f10e214]: "5"
+          - generic [ref=f10e215]: "10"
+          - generic [ref=f10e216]: "15"
+          - generic [ref=f10e217]: "20"
+          - generic [ref=f10e218]: "25"
+          - generic [ref=f10e219]: dB above background
+        - 'generic "train: n=33, 2.5â€“24.8 dB, mean 16.0 dB" [ref=f10e220]':
+          - generic [ref=f10e221]: train
+          - generic [ref=f10e222]: n=33
+          - generic [ref=f10e225]: "16.0"
+        - 'generic "road_vehicle: n=19, 2.3â€“24.8 dB, mean 13.8 dB" [ref=f10e226]':
+          - generic [ref=f10e227]: road_vehicle
+          - generic [ref=f10e228]: n=19
+          - generic [ref=f10e231]: "13.8"
+        - 'generic "footsteps: n=22, 2.4â€“24.6 dB, mean 12.3 dB" [ref=f10e232]':
+          - generic [ref=f10e233]: footsteps
+          - generic [ref=f10e234]: n=22
+          - generic [ref=f10e237]: "12.3"
+        - 'generic "digging: n=9, 3.1â€“24.4 dB, mean 13.2 dB" [ref=f10e238]':
+          - generic [ref=f10e239]: digging
+          - generic [ref=f10e240]: n=9
+          - generic [ref=f10e243]: "13.2"
+        - 'generic "burst: n=32, 2.5â€“24.9 dB, mean 13.1 dB" [ref=f10e244]':
+          - generic [ref=f10e245]: burst
+          - generic [ref=f10e246]: n=32
+          - generic [ref=f10e249]: "13.1"
+        - 'generic "wheel_flat: n=20, 3.5â€“23.6 dB, mean 14.1 dB" [ref=f10e250]':
+          - generic [ref=f10e251]: wheel_flat
+          - generic [ref=f10e252]: n=20
+          - generic [ref=f10e255]: "14.1"
+    - heading "Each family's own physics" [level=3] [ref=f10e256]
+    - paragraph [ref=f10e257]:
+      - text: Sampled once per run from these ranges â€” never shared between families, and
+      - code [ref=f10e258]: viaduct_hard
+      - text: /
+      - code [ref=f10e259]: peat_quiet
+      - text: are never sampled for training at all.
+    - table [ref=f10e261]:
+      - rowgroup [ref=f10e262]:
+        - row [ref=f10e263]:
+          - columnheader "family" [ref=f10e264]
+          - columnheader "role" [ref=f10e265]
+          - columnheader "runs" [ref=f10e266]
+          - columnheader "wave speed (m/s)" [ref=f10e267]
+          - 'columnheader "attenuation (Ã—10â»â´ /m)" [ref=f10e268]'
+          - columnheader "dispersion Î²" [ref=f10e269]
+          - columnheader "gauge (m)" [ref=f10e270]
+          - columnheader "spacing (m)" [ref=f10e271]
+      - rowgroup [ref=f10e272]:
+        - row [ref=f10e273]:
+          - cell "embankment_soft" [ref=f10e274]
+          - cell "train" [ref=f10e275]
+          - cell "8" [ref=f10e276]
+          - cell "170â€“220" [ref=f10e277]
+          - cell "1.5â€“3.0" [ref=f10e278]
+          - cell "0.08â€“0.14" [ref=f10e279]
+          - cell "8â€“12" [ref=f10e280]
+          - cell "0.95â€“1.15" [ref=f10e281]
+        - row [ref=f10e282]:
+          - cell "cutting_stiff" [ref=f10e283]
+          - cell "train" [ref=f10e284]
+          - cell "8" [ref=f10e285]
+          - cell "280â€“380" [ref=f10e286]
+          - cell "0.8â€“1.8" [ref=f10e287]
+          - cell "0.03â€“0.08" [ref=f10e288]
+          - cell "9â€“11" [ref=f10e289]
+          - cell "1.0â€“1.3" [ref=f10e290]
+        - row [ref=f10e291]:
+          - cell "urban_fill" [ref=f10e292]
+          - cell "train" [ref=f10e293]
+          - cell "7" [ref=f10e294]
+          - cell "200â€“260" [ref=f10e295]
+          - cell "2.5â€“5.0" [ref=f10e296]
+          - cell "0.10â€“0.18" [ref=f10e297]
+          - cell "5â€“8" [ref=f10e298]
+          - cell "1.8â€“2.4" [ref=f10e299]
+        - row [ref=f10e300]:
+          - cell "coastal_marsh" [ref=f10e301]
+          - cell "train" [ref=f10e302]
+          - cell "7" [ref=f10e303]
+          - cell "120â€“170" [ref=f10e304]
+          - cell "4.0â€“8.0" [ref=f10e305]
+          - cell "0.14â€“0.22" [ref=f10e306]
+          - cell "10â€“14" [ref=f10e307]
+          - cell "0.9â€“1.1" [ref=f10e308]
+        - row [ref=f10e309]:
+          - cell "viaduct_hard" [ref=f10e310]
+          - cell "holdout" [ref=f10e311]
+          - cell "6" [ref=f10e312]
+          - cell "400â€“550" [ref=f10e313]
+          - cell "0.5â€“1.2" [ref=f10e314]
+          - cell "0.01â€“0.05" [ref=f10e315]
+          - cell "6â€“9" [ref=f10e316]
+          - cell "1.4â€“1.8" [ref=f10e317]
+        - row [ref=f10e318]:
+          - cell "peat_quiet" [ref=f10e319]
+          - cell "holdout" [ref=f10e320]
+          - cell "6" [ref=f10e321]
+          - cell "95â€“135" [ref=f10e322]
+          - cell "6.0â€“12.0" [ref=f10e323]
+          - cell "0.18â€“0.28" [ref=f10e324]
+          - cell "12â€“20" [ref=f10e325]
+          - cell "2.5â€“4.0" [ref=f10e326]
+    - paragraph [ref=f10e327]:
+      - text: 42 runs, 503.6 s total (~12 s/run) on the CUDA box that built v2. 1 of 42 runs drew zero events (
+      - code [ref=f10e328]: "--empty-probability 0.1"
+      - text: ). Per the rewrite's own commit message, moving the background through the gauge operator took adjacent-channel correlation from 0.237 to 0.868 (with the expected negative lobe at the gauge lag) and effective rank from 7.2 to 36.6 of 300.
+  - generic [ref=f10e329]:
+    - generic [ref=f10e330]: Model
+    - heading "One encoder, two jobs" [level=2] [ref=f10e331]
+    - paragraph [ref=f10e332]:
+      - text: The backbone tokenizes a (channels, time) window into one token per time-patch across every channel, and trains with masked reconstruction plus a LeJEPA-style SIGReg regularizer pulling the pooled projection toward an isotropic Gaussian. Afterward,
+      - code [ref=f10e333]: model.anomaly
+      - text: reuses that exact same trained encoder, frozen, to calibrate an anomaly score on background-only windows.
+    - figure [ref=f10e334]:
+      - 'img "Diagram: an input window is patchified, masked, and encoded by a shared Transformer. During training, a reconstruction head computes masked MSE and a projector computes SIGReg, combined into the training loss. After training, the same frozen encoder scores background-only calibration windows through a residual z-score and an embedding Mahalanobis z-score, combined and compared against a quantile threshold." [ref=f10e335]':
+        - generic [ref=f10e336]: training â€” model.train
+        - generic [ref=f10e338]: input window (B, C, T)
+        - generic [ref=f10e339]: normalized per channel
+        - generic [ref=f10e341]: patchify + pos-embed
+        - generic [ref=f10e342]: masked spans â†’ mask token
+        - generic [ref=f10e344]: Transformer encoder Ã—N
+        - generic [ref=f10e345]: pre-norm, backbone.py
+        - generic [ref=f10e349]: reconstruction head
+        - generic [ref=f10e350]: predict raw patch values
+        - generic [ref=f10e352]: mean-pool â†’ projector
+        - generic [ref=f10e353]: proj_dim embedding
+        - generic [ref=f10e355]: masked MSE
+        - generic [ref=f10e357]: SIGReg
+        - generic [ref=f10e359]: (1âˆ’Î»)Â·MSE + Î»Â·SIGReg
+        - generic [ref=f10e360]: losses.py â€” backprop
+        - generic [ref=f10e362]: scoring â€” model.anomaly, encoder frozen
+        - generic [ref=f10e364]: same trained weights
+        - generic [ref=f10e366]: background-only windows
+        - generic [ref=f10e367]: filter_background(), 255 excluded too
+        - generic [ref=f10e371]: residual z
+        - generic [ref=f10e372]: error vs calibration Î¼, Ïƒ
+        - generic [ref=f10e374]: embedding z
+        - generic [ref=f10e375]: Mahalanobis vs fitted Gaussian
+        - generic [ref=f10e379]: weighted score â‰¥ quantile threshold
+        - generic [ref=f10e380]: â†’ is_anomaly
+      - generic [ref=f10e381]:
+        - text: "The dashed arrow is the point of the picture: scoring reuses the exact encoder training produced, not a re-derived one."
+        - code [ref=f10e382]: filter_background()
+        - text: treats IGNORE_ID (255) exactly like an event pixel, so windows holding an unlabelled background transient never reach calibration either.
+  - generic [ref=f10e383]:
+    - generic [ref=f10e384]: Verification
+    - heading "A CPU sanity check, not a benchmark" [level=2] [ref=f10e385]
+    - paragraph [ref=f10e386]:
+      - text: To confirm the fix in
+      - link [ref=f10e387] [cursor=pointer]:
+        - /url: "#status"
+        - code [ref=f10e388]: model/infer.py
+      - text: "actually resolves the crash, this ran the whole chain on CPU: generate â†’ validate â†’ train â†’ infer â†’ evaluate."
+    - generic [ref=f10e389]: simulate_das.py --duration 4 --n-channels 40 --device cpu --seed 1 model.train --window-size 256 --stride 64 --patch-size 16 --d-model 32 --n-heads 4 --n-layers 1 --decoder-layers 1 --dim-feedforward 64 --proj-dim 16 --proj-hidden 32 --epochs 1 --batch-size 4 --device cpu model.infer / model.evaluate --device cpu
+    - generic [ref=f10e390]:
+      - generic [ref=f10e391]: note
+      - generic [ref=f10e392]:
+        - text: AUC = 1.0 below is what 3 background windows and 1 training epoch look like, not evidence the model detects anomalies well. This checks that generate â†’ train â†’ infer â†’ evaluate runs correctly end to end on CPU â€” including the line that used to crash â€” not that it works at scale. A real read needs
+        - code [ref=f10e393]: data/synthetic/v2
+        - text: ", a GPU, and more than one epoch."
+    - generic [ref=f10e394]:
+      - generic [ref=f10e395]:
+        - generic [ref=f10e396]: "1.000"
+        - generic [ref=f10e397]: AUC, combined score (n=10 scored windows)
+      - generic [ref=f10e398]:
+        - generic [ref=f10e399]: "1.000"
+        - generic [ref=f10e400]: AUC, embedding_z
+      - generic [ref=f10e401]:
+        - generic [ref=f10e402]: "0.476"
+        - generic [ref=f10e403]: AUC, residual_z alone
+      - generic [ref=f10e404]:
+        - generic [ref=f10e405]: 0.875 / 1.00
+        - generic [ref=f10e406]: precision / recall at threshold
+    - table [ref=f10e408]:
+      - rowgroup [ref=f10e409]:
+        - row [ref=f10e410]:
+          - columnheader "class" [ref=f10e411]
+          - columnheader "windows" [ref=f10e412]
+          - columnheader "detected" [ref=f10e413]
+          - columnheader "rate" [ref=f10e414]
+          - columnheader "mean score" [ref=f10e415]
+      - rowgroup [ref=f10e416]:
+        - row [ref=f10e417]:
+          - cell "train" [ref=f10e418]
+          - cell "7" [ref=f10e419]
+          - cell "7" [ref=f10e420]
+          - cell "100.0%" [ref=f10e421]
+          - cell "18.95" [ref=f10e422]
+        - row [ref=f10e423]:
+          - cell "wheel_flat" [ref=f10e424]
+          - cell "2" [ref=f10e425]
+          - cell "2" [ref=f10e426]
+          - cell "100.0%" [ref=f10e427]
+          - cell "16.11" [ref=f10e428]
+        - row [ref=f10e429]:
+          - cell "background" [ref=f10e430]
+          - cell "3" [ref=f10e431]
+          - cell "â€”" [ref=f10e432]
+          - cell "â€”" [ref=f10e433]
+          - cell "0.54" [ref=f10e434]
+    - paragraph [ref=f10e435]:
+      - text: 15 windows total, 5 dropped for unlabelled-ignore content, 10 scored (7 event, 3 background). Threshold 1.549, calibrated by
+      - code [ref=f10e436]: model.anomaly.AnomalyDetector.fit
+      - text: on those same 3 background windows. The band-pass-RMS baseline also scores 1.000 AUC here â€” at this sample size a trivial energy detector and the trained model are indistinguishable, which is itself informative about how small this run is.
+  - generic [ref=f10e437]:
+    - generic [ref=f10e438]: Status
+    - heading "What changed to make this page accurate" [level=2] [ref=f10e439]
+    - paragraph [ref=f10e440]:
+      - text: Fixed and pushed as
+      - 'link "PR #1" [ref=f10e441] [cursor=pointer]':
+        - /url: https://github.com/NeonFeline/Nerw/pull/1
+      - text: "on"
+      - link "NeonFeline/Nerw" [ref=f10e442] [cursor=pointer]:
+        - /url: https://github.com/NeonFeline/Nerw
+      - text: ", branch"
+      - code [ref=f10e443]: fix/infer-import-and-docs
+      - text: .
+    - list [ref=f10e444]:
+      - listitem [ref=f10e445]:
+        - generic [ref=f10e446]: fixed
+        - generic [ref=f10e447]:
+          - code [ref=f10e448]: model/infer.py
+          - text: used
+          - code [ref=f10e449]: pathlib.Path
+          - text: without importing it â€”
+          - code [ref=f10e450]: python -m model.infer
+          - text: raised
+          - code [ref=f10e451]: NameError
+          - text: before parsing its own arguments. Found with
+          - code [ref=f10e452]: pyflakes
+          - text: (the only undefined-name hit in the repo); confirmed fixed by the run in Â§Sanity check. 5b913e0
+      - listitem [ref=f10e453]:
+        - generic [ref=f10e454]: added
+        - generic [ref=f10e455]:
+          - code [ref=f10e456]: CLAUDE.md
+          - text: â€” commands and architecture notes for future sessions â€” and tracked
+          - code [ref=f10e457]: specfem2d/surface_blast/
+          - text: "'s source files (its own"
+          - code [ref=f10e458]: .gitignore
+          - text: already excludes the 11 MB
+          - code [ref=f10e459]: OUTPUT_FILES/
+          - text: ). 99e27e9
+      - listitem [ref=f10e460]:
+        - generic [ref=f10e461]: verified
+        - generic [ref=f10e462]:
+          - code [ref=f10e463]: uv run pytest
+          - text: â€” 29/29 passing, plus the manual CPU chain in Â§Sanity check.
+    - paragraph [ref=f10e464]: Generated from the repository's own manifest, test output, and two real recordings â€” no figures on this page are illustrative or simulated for effect.
