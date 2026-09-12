@@ -1,0 +1,25 @@
+[project]
+name = "opticalcable"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "h5py>=3.16.0",
+    "matplotlib>=3.10.9",
+    "numpy>=2.2.6",
+    "scipy>=1.15.3",
+    "torch>=2.0",
+    "tqdm>=4.70.1",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

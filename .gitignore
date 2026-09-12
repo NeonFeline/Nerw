@@ -1,0 +1,19 @@
+# Virtualenv
+.venv/
+
+# Generated datasets (~6 GB). Rebuild byte-for-byte with the command recorded
+# in manifest.json, e.g.
+#   uv run python make_dataset.py --out data/synthetic/v2
+# The manifests are kept: they carry the argv, seeds, library versions and a
+# sha256 per recording.
+data/**
+!data/**/
+!data/**/manifest.json
+
+# Training artifacts (checkpoints, scores, logs)
+runs/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
