@@ -17,3 +17,6 @@ runs/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Playwright MCP debug output (screenshots, console/page dumps)
+.playwright-mcp/
