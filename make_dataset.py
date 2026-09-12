@@ -568,7 +568,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--device", type=str, default=None)
     ap.add_argument("--workers", type=int, default=1,
                     help="parallel run builders; 0 uses every allocated core. Runs are "
-                         "independent, so this scales until the single GPU saturates")
+                         "independent, so this scales until the single GPU saturates "
+                         "(8 is the sweet spot on one card; each worker needs ~1.4 GiB "
+                         "of it, so leave headroom for anything else using the GPU)")
     ap.add_argument("--shard-index", type=int, default=0,
                     help="with --shard-count, build only this slice of the plan "
                          "(for a Slurm job array across nodes)")
@@ -611,13 +613,35 @@ def _worker(payload):
     directory -- so the only shared resource is the GPU, which serialises the
     propagation kernels while the wavelet synthesis, labelling and HDF5 writing
     of other runs proceed on their own cores.
+
+    That sharing has to be budgeted.  A run peaks around 1 GiB of caching
+    allocator plus a ~0.4 GiB CUDA context per process, and cuFFT takes its
+    plans from whatever is left *outside* the allocator -- so an uncapped pool
+    in eight workers exhausts the card and surfaces as CUFFT_ALLOC_FAILED
+    rather than a clean OOM.  Cap the pool, keep the plan cache small, hand
+    memory back between runs, and retry once if a neighbour wins the race.
     """
-    args, split, family, index, seed, threads = payload
+    args, split, family, index, seed, threads, workers = payload
     import torch
 
     torch.set_num_threads(max(1, threads))
     sd.set_device(args.device)
-    return build_run(args, split, family, index, seed)
+    if torch.cuda.is_available():
+        if workers > 1:
+            torch.cuda.set_per_process_memory_fraction(max(0.04, 0.80 / workers))
+        torch.backends.cuda.cufft_plan_cache.max_size = 8
+    try:
+        return build_run(args, split, family, index, seed)
+    except RuntimeError as error:
+        if "CUFFT" not in str(error) and "out of memory" not in str(error).lower():
+            raise
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        time.sleep(2.0 + 0.5 * (index % 8))
+        return build_run(args, split, family, index, seed)
+    finally:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 def _manifest(args, runs, plan_size, seconds) -> dict:
@@ -705,12 +729,12 @@ def main() -> None:
     runs = []
     started = time.time()
     if workers == 1:
-        results = (_worker((args, s, f, i, d, threads)) for s, f, i, d in plan)
+        results = (_worker((args, s, f, i, d, threads, 1)) for s, f, i, d in plan)
     else:
         # spawn, not fork: a forked CUDA context is not usable in the child
         context = mp.get_context("spawn")
         pool = context.Pool(workers)
-        payloads = [(args, s, f, i, d, threads) for s, f, i, d in plan]
+        payloads = [(args, s, f, i, d, threads, workers) for s, f, i, d in plan]
         results = pool.imap_unordered(_worker, payloads)
         print(f"[pool] {workers} workers x {threads} torch threads on one GPU")
 
