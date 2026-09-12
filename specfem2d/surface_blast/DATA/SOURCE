@@ -1,0 +1,29 @@
+## Source 1: small explosion at the free surface
+# Mesh coordinates (origin lower-left, z up): depth 0 on the 50 m deep mesh is z = 50.
+source_surf                     = .false.        # .true. would snap zs to the surface instead
+xs                              = 50.            # source location x in meters
+zs                              = 50.            # source location z in meters
+## Source type parameters:
+#  1 = elastic force or acoustic pressure
+#  2 = moment tensor
+source_type                     = 2
+# Source time function:
+#  1 = second derivative of a Gaussian (a.k.a. Ricker)
+time_function_type              = 1
+name_of_source_file             = YYYYYYYY       # Only for option 8 : file containing the source wavelet
+burst_band_width                = 0.             # Only for option 9 : band width of the burst
+f0                              = 50.0           # dominant (peak) frequency of the Ricker in Hz; the solver delays it by t0 = 1.2 / f0
+tshift                          = 0.0            # time shift when multi sources (if one source, must be zero)
+## Force source
+anglesource                     = 0.             # unused for moment tensor sources
+## Moment tensor
+# Isotropic (explosive) source.  In 2D plane strain this is a line source: N.m per metre out of plane.
+Mxx                             = 1.
+Mzz                             = 1.
+Mxz                             = 0.
+## Amplification (factor to amplify source time function)
+# Scalar moment.  The wavefield is linear in it, so strains scale directly.
+factor                          = 1.d0
+## Moving source parameters
+vx                              = 0.0            # Horizontal source velocity (m/s)
+vz                              = 0.0            # Vertical source velocity (m/s)

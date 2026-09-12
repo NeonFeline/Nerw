@@ -1,0 +1,20 @@
+# Flat half-space, 100 m x 50 m, for the SPECFEM2D internal mesher.
+#
+# number of interfaces
+ 2
+#
+# for each interface: number of points, then x z for each point
+#
+# interface 1 (bottom of the mesh)
+ 2
+   0.0   0.0
+ 100.0   0.0
+# interface 2 (free surface, top of the mesh)
+ 2
+   0.0  50.0
+ 100.0  50.0
+#
+# for each layer: number of spectral elements in the vertical direction
+#
+# layer 1: 100 elements = 0.5 m
+ 100

@@ -1,0 +1,2 @@
+# SPECFEM2D run output, including the strain gather and .npz written by das_strain.py
+OUTPUT_FILES/
