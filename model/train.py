@@ -62,6 +62,13 @@ def parse_args() -> argparse.Namespace:
              "pixels (class 255) count against a window just like event pixels, "
              "so unlabeled transients stay out of the calibration set",
     )
+    data.add_argument(
+        "--highpass-hz", type=float, default=2.0,
+        help="strip sub-Hz drift before windowing. Raw DAS puts most of its "
+             "variance below 1 Hz, where no event lives: unfiltered, a window-RMS "
+             "detector scores chance on the same data a 15-150 Hz one scores 0.78 "
+             "on. Must match --highpass-hz at fine-tuning time. 0 disables.",
+    )
     data.add_argument("--synthetic-channels", type=int, default=32)
     data.add_argument("--synthetic-samples", type=int, default=60000)
     data.add_argument("--window-size", type=int, default=1024)
@@ -139,7 +146,8 @@ def build_datasets(args: argparse.Namespace) -> WindowDataset:
         raise SystemExit("provide --data or --synthetic")
     paths = discover_recordings(args.data)
     return WindowDataset.from_paths(
-        paths, args.window_size, stride, key=args.key, normalize=True
+        paths, args.window_size, stride, key=args.key, normalize=True,
+        highpass_hz=args.highpass_hz,
     )
 
 

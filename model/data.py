@@ -167,6 +167,9 @@ class WindowDataset(Dataset):
         normalize: bool = True,
         labels: Sequence[np.ndarray | None] | None = None,
         metadata: list[dict] | None = None,
+        return_labels: bool = False,
+        highpass_hz: float | None = None,
+        sample_rate: float | None = None,
     ) -> None:
         if not arrays:
             raise ValueError("at least one array is required")
@@ -179,6 +182,19 @@ class WindowDataset(Dataset):
             raise ValueError("stride must be >= 1")
         self.normalize = bool(normalize)
         self.metadata = metadata or [{} for _ in self.arrays]
+        self.return_labels = bool(return_labels)
+        self.highpass_hz = float(highpass_hz) if highpass_hz else None
+        self.sample_rate = float(sample_rate) if sample_rate else None
+        if self.highpass_hz:
+            if not self.sample_rate:
+                rate = next(
+                    (m.get("sampling_rate") for m in self.metadata if m.get("sampling_rate")),
+                    None,
+                )
+                if rate is None:
+                    raise ValueError("highpass_hz needs sample_rate (or miniDAS metadata)")
+                self.sample_rate = float(rate)
+            self.arrays = [self._highpass(a) for a in self.arrays]
 
         num_channels = self.arrays[0].shape[0]
         for array in self.arrays:
@@ -209,6 +225,21 @@ class WindowDataset(Dataset):
         self.channel_std: torch.Tensor | None = None
         if channel_mean is not None and channel_std is not None:
             self.set_channel_stats(channel_mean, channel_std)
+
+    def _highpass(self, array: np.ndarray) -> np.ndarray:
+        """Strip the sub-Hz drift the events are buried under.
+
+        Raw DAS is dominated by drift, common mode and the microseism; a
+        broadband window is mostly energy no detector can use, which is why an
+        unfiltered RMS detector scores chance on data where a 15-150 Hz one
+        scores 0.78.  Every real pipeline filters first, so the model should
+        see what the pipeline would hand it.
+        """
+        from scipy.signal import butter, sosfiltfilt
+
+        sos = butter(4, self.highpass_hz / (self.sample_rate / 2), btype="high",
+                     output="sos")
+        return sosfiltfilt(sos, np.asarray(array, dtype=np.float32), axis=1).astype(np.float32)
 
     @classmethod
     def from_paths(
@@ -328,13 +359,22 @@ class WindowDataset(Dataset):
     def __len__(self) -> int:
         return len(self.index)
 
-    def __getitem__(self, item: int) -> torch.Tensor:
+    def __getitem__(self, item: int):
         file_index, start = self.index[item]
         window = self.arrays[file_index][:, start : start + self.window_size]
         x = torch.as_tensor(np.ascontiguousarray(window), dtype=torch.float32)
         if self.normalize and self.channel_mean is not None:
             x = (x - self.channel_mean[:, None]) / self.channel_std[:, None]
-        return x
+        if not self.return_labels:
+            return x
+        label = self.labels[file_index]
+        if label is None:
+            y = torch.full(x.shape, IGNORE_CLASS, dtype=torch.uint8)
+        else:
+            y = torch.as_tensor(
+                np.ascontiguousarray(label[:, start : start + self.window_size])
+            )
+        return x, y.long()
 
 
 def estimate_channel_stats(
@@ -349,7 +389,7 @@ def estimate_channel_stats(
     rng = np.random.default_rng(seed)
     picks = rng.choice(len(dataset), size=count, replace=False)
 
-    total = np.zeros(dataset.num_channels, dtype=np.float64)
+    total = np.zeros(dataset.num_channels, dtype=np.float64)  # raw windows, not __getitem__
     total_sq = np.zeros(dataset.num_channels, dtype=np.float64)
     samples = 0
     for pick in picks:

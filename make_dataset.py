@@ -25,6 +25,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import multiprocessing as mp
+import os
 import platform
 import subprocess
 import sys
@@ -39,101 +41,144 @@ import simulate_das as sd
 SITE_FAMILIES: dict[str, dict] = {
     "embankment_soft": {
         "wave_speed": (170.0, 220.0),
-        "attenuation": (1.5e-4, 3.0e-4),
+        "damping_ratio": (0.030, 0.055),
         "dispersion": (0.08, 0.14),
         "gauge_length": (8.0, 12.0),
         "channel_spacing": (0.95, 1.15),
         "track_offset": (5.0, 9.0),
         "road_offset": (11.0, 18.0),
         "noise_correlation": (1.5, 3.0),
+        "noise_knee_hz": (2.0, 5.0),
         "ambient_sources": (6, 14),
         "ambient_level": (0.08, 0.18),
+        "microseism": (0.04, 0.10),
         "burst_rate": (0.05, 0.4),
         "glitch_rate": (0.03, 0.2),
         "event_mix": {"train": 3.0, "wheel_flat": 1.0, "road_vehicle": 2.0,
-                      "walker": 1.5, "digging": 1.0, "burst": 1.5},
+                      "walker": 1.5, "burst": 1.5,
+                      "digging": 1.2, "cable_cut": 1.0, "track_tamper": 1.0,
+                      "fence_cut": 0.8, "vehicle_stop": 1.0},
     },
     "cutting_stiff": {
         "wave_speed": (280.0, 380.0),
-        "attenuation": (0.8e-4, 1.8e-4),
+        "damping_ratio": (0.018, 0.035),
         "dispersion": (0.03, 0.08),
         "gauge_length": (9.0, 11.0),
         "channel_spacing": (1.0, 1.3),
         "track_offset": (4.0, 7.0),
         "road_offset": (20.0, 35.0),
         "noise_correlation": (1.0, 2.5),
+        "noise_knee_hz": (1.5, 4.0),
         "ambient_sources": (4, 10),
         "ambient_level": (0.05, 0.12),
+        "microseism": (0.03, 0.08),
         "burst_rate": (0.02, 0.2),
         "glitch_rate": (0.02, 0.12),
         "event_mix": {"train": 3.0, "wheel_flat": 1.5, "road_vehicle": 1.0,
-                      "walker": 1.0, "digging": 1.5, "burst": 1.0},
+                      "walker": 1.0, "burst": 1.0,
+                      "digging": 1.5, "cable_cut": 1.2, "track_tamper": 1.2,
+                      "fence_cut": 0.8, "vehicle_stop": 0.8},
     },
     "urban_fill": {
         "wave_speed": (200.0, 260.0),
-        "attenuation": (2.5e-4, 5.0e-4),
+        "damping_ratio": (0.045, 0.075),
         "dispersion": (0.10, 0.18),
         "gauge_length": (5.0, 8.0),
         "channel_spacing": (1.8, 2.4),
         "track_offset": (8.0, 14.0),
         "road_offset": (8.0, 14.0),
         "noise_correlation": (2.0, 4.0),
+        "noise_knee_hz": (3.0, 7.0),
         "ambient_sources": (14, 24),
         "ambient_level": (0.18, 0.30),
+        "microseism": (0.05, 0.12),
         "burst_rate": (0.5, 2.0),
         "glitch_rate": (0.15, 0.45),
         "event_mix": {"train": 2.0, "wheel_flat": 1.0, "road_vehicle": 4.0,
-                      "walker": 3.0, "digging": 2.0, "burst": 2.5},
+                      "walker": 3.0, "burst": 2.5,
+                      "digging": 2.0, "cable_cut": 1.5, "track_tamper": 1.0,
+                      "fence_cut": 1.5, "vehicle_stop": 2.0},
     },
     "coastal_marsh": {
         "wave_speed": (120.0, 170.0),
-        "attenuation": (4.0e-4, 8.0e-4),
+        "damping_ratio": (0.050, 0.090),
         "dispersion": (0.14, 0.22),
         "gauge_length": (10.0, 14.0),
         "channel_spacing": (0.9, 1.1),
         "track_offset": (6.0, 11.0),
         "road_offset": (25.0, 45.0),
         "noise_correlation": (2.5, 5.0),
+        "noise_knee_hz": (2.0, 6.0),
         "ambient_sources": (10, 20),
         "ambient_level": (0.15, 0.28),
+        "microseism": (0.06, 0.14),
         "burst_rate": (0.1, 0.6),
         "glitch_rate": (0.05, 0.3),
         "event_mix": {"train": 3.0, "wheel_flat": 1.0, "road_vehicle": 1.0,
-                      "walker": 2.0, "digging": 1.0, "burst": 2.0},
+                      "walker": 2.0, "burst": 2.0,
+                      "digging": 1.5, "cable_cut": 1.0, "track_tamper": 1.0,
+                      "fence_cut": 1.0, "vehicle_stop": 1.0},
     },
     # held out: neither the medium, the geometry nor the event mix is seen above
     "viaduct_hard": {
         "wave_speed": (400.0, 550.0),
-        "attenuation": (0.5e-4, 1.2e-4),
+        "damping_ratio": (0.012, 0.025),
         "dispersion": (0.01, 0.05),
         "gauge_length": (6.0, 9.0),
         "channel_spacing": (1.4, 1.8),
         "track_offset": (2.0, 5.0),
         "road_offset": (30.0, 60.0),
         "noise_correlation": (0.8, 2.0),
+        "noise_knee_hz": (1.0, 3.0),
         "ambient_sources": (5, 12),
         "ambient_level": (0.06, 0.15),
+        "microseism": (0.03, 0.07),
         "burst_rate": (0.05, 0.5),
         "glitch_rate": (0.03, 0.25),
         "event_mix": {"train": 4.0, "wheel_flat": 2.0, "road_vehicle": 0.5,
-                      "walker": 1.0, "digging": 1.0, "burst": 1.5},
+                      "walker": 1.0, "burst": 1.5,
+                      "digging": 1.0, "cable_cut": 1.2, "track_tamper": 1.5,
+                      "fence_cut": 0.8, "vehicle_stop": 0.8},
     },
     "peat_quiet": {
         "wave_speed": (95.0, 135.0),
-        "attenuation": (6.0e-4, 1.2e-3),
+        "damping_ratio": (0.060, 0.110),
         "dispersion": (0.18, 0.28),
         "gauge_length": (12.0, 20.0),
         "channel_spacing": (2.5, 4.0),
         "track_offset": (10.0, 18.0),
         "road_offset": (40.0, 80.0),
         "noise_correlation": (3.0, 6.0),
+        "noise_knee_hz": (2.5, 6.0),
         "ambient_sources": (3, 8),
         "ambient_level": (0.03, 0.09),
+        "microseism": (0.04, 0.09),
         "burst_rate": (0.01, 0.15),
         "glitch_rate": (0.01, 0.1),
         "event_mix": {"train": 3.0, "wheel_flat": 1.5, "road_vehicle": 1.0,
-                      "walker": 2.5, "digging": 2.0, "burst": 1.0},
+                      "walker": 2.5, "burst": 1.0,
+                      "digging": 2.0, "cable_cut": 1.5, "track_tamper": 1.2,
+                      "fence_cut": 1.2, "vehicle_stop": 1.2},
     },
+}
+
+# Peak envelope SNR each class is calibrated to, in dB over the realised
+# background.  A train on trackside fibre is unmissable and the detector's job
+# is to classify it, not to find it; a person walking, or bolt croppers on a
+# fence, sit just above the noise and are the genuinely hard cases.  Security
+# classes are over-represented relative to real base rates on purpose -- this
+# is a training mix, not a prior.
+SNR_RANGES: dict[str, tuple[float, float]] = {
+    "train": (26.0, 48.0),
+    "wheel_flat": (22.0, 42.0),
+    "road_vehicle": (12.0, 32.0),
+    "vehicle_stop": (12.0, 30.0),
+    "walker": (4.0, 16.0),
+    "burst": (5.0, 20.0),
+    "digging": (8.0, 24.0),
+    "cable_cut": (6.0, 22.0),
+    "track_tamper": (10.0, 28.0),
+    "fence_cut": (3.0, 13.0),
 }
 
 TRAIN_FAMILIES = ("embankment_soft", "cutting_stiff", "urban_fill", "coastal_marsh")
@@ -156,11 +201,12 @@ def sample_site(rng, family: str, base: dict) -> dict:
     cfg = dict(base)
     cfg.update({
         "wave_speed": _uniform(rng, spec["wave_speed"]),
-        "attenuation": _log_uniform(rng, spec["attenuation"]),
+        "damping_ratio": _uniform(rng, spec["damping_ratio"]),
         "dispersion": _uniform(rng, spec["dispersion"]),
         "gauge_length": _uniform(rng, spec["gauge_length"]),
         "channel_spacing": _uniform(rng, spec["channel_spacing"]),
         "noise_correlation_m": _uniform(rng, spec["noise_correlation"]),
+        "noise_knee_hz": _uniform(rng, spec["noise_knee_hz"]),
         "family": family,
         "background": {
             "ambient_sources": int(rng.integers(*spec["ambient_sources"])),
@@ -168,7 +214,7 @@ def sample_site(rng, family: str, base: dict) -> dict:
             "burst_rate": _log_uniform(rng, spec["burst_rate"]),
             "glitch_rate": _log_uniform(rng, spec["glitch_rate"]),
             "gust": _uniform(rng, (0.3, 1.4)),
-            "microseism": _uniform(rng, (0.12, 0.40)),
+            "microseism": _uniform(rng, spec["microseism"]),
             "dead_fraction": _uniform(rng, (0.0, 0.05)),
             "noisy_fraction": _uniform(rng, (0.0, 0.04)),
             "burst_gain": [_uniform(rng, (3.0, 8.0)), _uniform(rng, (10.0, 30.0))],
@@ -199,10 +245,31 @@ def _moving_start(rng, ch_pos, speed, duration, margin):
     return float(rng.uniform(lo - 0.25 * travel, hi - travel))
 
 
-def sample_event(rng, kind, cfg, ch_pos, index, snr_range):
+def _rail_path(rng):
+    """Guided path along the rail, alongside the ground path.
+
+    Steel carries a blow at kilometres per second and radiates into the ground
+    along its length, so it reaches much further than the surface wave but
+    still decays: these numbers put it roughly 20 dB down over 200-300 m.
+    """
+    return [
+        {"weight": 1.0},
+        {
+            "weight": round(_uniform(rng, (0.2, 0.5)), 3),
+            "medium": {
+                "wave_speed": round(_uniform(rng, (2000.0, 3400.0)), 1),
+                "damping_ratio": round(_uniform(rng, (0.035, 0.075)), 4),
+                "dispersion": 0.0,
+                "spreading_power": round(_uniform(rng, (0.0, 0.2)), 3),
+            },
+        },
+    ]
+
+
+def sample_event(rng, kind, cfg, ch_pos, index, snr_range=None):
     duration = float(cfg["duration"])
     spec = SITE_FAMILIES[cfg["family"]]
-    snr = _uniform(rng, snr_range)
+    snr = _uniform(rng, snr_range or SNR_RANGES[kind])
     common = {"id": f"{kind}{index}", "snr_db": round(snr, 2)}
 
     if kind in ("train", "wheel_flat"):
@@ -295,17 +362,100 @@ def sample_event(rng, kind, cfg, ch_pos, index, snr_range):
             "coda": round(_uniform(rng, (0.05, 0.5)), 3),
         }
 
+    if kind == "cable_cut":
+        t0 = _uniform(rng, (0.0, max(duration - 5.0, 0.5)))
+        t1 = min(duration, t0 + _uniform(rng, (4.0, min(35.0, duration))))
+        return {
+            "kind": "cable_cut", "class": "cable_cut", **common,
+            "x": round(float(rng.uniform(ch_pos[0], ch_pos[-1])), 1),
+            "y": round(_uniform(rng, (0.3, 4.0)), 2),
+            "z": round(_uniform(rng, (0.1, 1.2)), 2),
+            "t_start": round(t0, 2), "t_end": round(t1, 2),
+            "f0": round(_uniform(rng, (90.0, 380.0)), 1),
+            "grit": round(_uniform(rng, (0.2, 1.0)), 3),
+            "burst_seconds": [round(_uniform(rng, (0.5, 1.5)), 2),
+                              round(_uniform(rng, (2.0, 5.0)), 2)],
+            "gap_seconds": [round(_uniform(rng, (0.3, 1.0)), 2),
+                            round(_uniform(rng, (1.5, 4.0)), 2)],
+            "coda": round(_uniform(rng, (0.05, 0.4)), 3),
+        }
+
+    if kind == "track_tamper":
+        t0 = _uniform(rng, (0.0, max(duration - 4.0, 0.5)))
+        t1 = min(duration, t0 + _uniform(rng, (3.0, min(30.0, duration))))
+        return {
+            "kind": "track_tamper", "class": "track_tamper", **common,
+            "x": round(float(rng.uniform(ch_pos[0], ch_pos[-1])), 1),
+            "y": round(_uniform(rng, spec["track_offset"]), 2),
+            "z": round(_uniform(rng, (0.05, 0.6)), 2),
+            "t_start": round(t0, 2), "t_end": round(t1, 2),
+            "f0": round(_uniform(rng, (90.0, 300.0)), 1),
+            "rate": round(_uniform(rng, (0.6, 3.5)), 2),
+            "paths": _rail_path(rng),
+            "coda": round(_uniform(rng, (0.05, 0.4)), 3),
+        }
+
+    if kind == "fence_cut":
+        speed = _uniform(rng, (0.05, 0.5)) * rng.choice([-1.0, 1.0])
+        t0 = _uniform(rng, (0.0, max(duration - 6.0, 0.5)))
+        t1 = min(duration, t0 + _uniform(rng, (5.0, min(35.0, duration))))
+        return {
+            "kind": "fence_cut", "class": "fence_cut", **common,
+            "x0": round(float(rng.uniform(ch_pos[0], ch_pos[-1])), 1),
+            "speed": round(float(speed), 3),
+            "t_start": round(t0, 2), "t_end": round(t1, 2),
+            "y": round(_uniform(rng, (1.5, 12.0)), 2),
+            "z": round(_uniform(rng, (0.1, 1.5)), 2),
+            "rate": round(_uniform(rng, (0.25, 1.2)), 3),
+            "f0_range": [round(_uniform(rng, (150.0, 250.0)), 1),
+                         round(_uniform(rng, (350.0, 480.0)), 1)],
+            "speed_jitter": 0.0,
+            "coda": round(_uniform(rng, (0.05, 0.3)), 3),
+        }
+
+    if kind == "vehicle_stop":
+        speed = _uniform(rng, (6.0, 22.0)) * rng.choice([-1.0, 1.0])
+        t_brake = _uniform(rng, (0.15 * duration, 0.6 * duration))
+        t_stop = t_brake + _uniform(rng, (2.0, 7.0))
+        return {
+            "kind": "vehicle_stop", "class": "vehicle_stop", **common,
+            "x0": round(_moving_start(rng, ch_pos, speed, t_stop, 20.0), 1),
+            "speed": round(float(speed), 2),
+            "t_brake": round(t_brake, 2), "t_stop": round(min(t_stop, duration - 0.5), 2),
+            "y": round(_uniform(rng, spec["road_offset"]), 2),
+            "z": round(_uniform(rng, (0.3, 1.2)), 2),
+            "length": round(_uniform(rng, (4.0, 12.0)), 1),
+            "fmin": round(_uniform(rng, (4.0, 12.0)), 1),
+            "fmax": round(_uniform(rng, (70.0, 160.0)), 1),
+            "f0": round(_uniform(rng, (25.0, 60.0)), 1),
+            "engine_f0": round(_uniform(rng, (20.0, 70.0)), 1),
+            "engine_amp": round(_uniform(rng, (0.1, 0.6)), 3),
+            "idle_f0": round(_uniform(rng, (14.0, 32.0)), 1),
+            "idle_amp": round(_uniform(rng, (0.2, 0.8)), 3),
+            "qs_ratio": round(_uniform(rng, (0.0, 0.3)), 3),
+            "speed_jitter": round(_uniform(rng, (0.0, 0.05)), 4),
+            "coda": round(_uniform(rng, (0.05, 0.4)), 3),
+        }
+
     raise ValueError(f"unknown event kind: {kind}")
 
 
-def sample_scenario(rng, cfg, max_events, snr_range, empty_probability):
-    """A fresh scene: count, kinds, placement and SNR all drawn per run."""
+def sample_scenario(rng, cfg, max_events, snr_range=None, empty_probability=0.1,
+                    temperature=1.0):
+    """A fresh scene: count, kinds, placement and SNR all drawn per run.
+
+    ``temperature`` flattens the family's event mix towards uniform.  The mix
+    describes what a site sees, but a training set starved of a class teaches
+    the model to memorise its handful of examples; 1.0 keeps the site's own
+    proportions, higher values even them out without erasing the family's
+    character.
+    """
     if rng.random() < empty_probability:
         return []
     ch_pos = sd.channel_positions(cfg)
     mix = SITE_FAMILIES[cfg["family"]]["event_mix"]
     kinds = list(mix)
-    weights = np.asarray([mix[k] for k in kinds], float)
+    weights = np.asarray([mix[k] for k in kinds], float) ** (1.0 / max(temperature, 1e-6))
     weights /= weights.sum()
     n_events = int(rng.integers(1, max_events + 1))
     scenario = []
@@ -361,7 +511,7 @@ def build_run(args, split: str, family: str, run_index: int, seed: int) -> dict:
     }
     cfg = sample_site(rng, family, base)
     scenario = sample_scenario(
-        rng, cfg, args.max_events, (args.min_snr_db, args.max_snr_db), args.empty_probability
+        rng, cfg, args.max_events, None, args.empty_probability, args.mix_temperature
     )
 
     out_dir = Path(args.out) / split / f"{family}_{run_index:03d}"
@@ -407,6 +557,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--max-events", type=int, default=6)
     ap.add_argument("--min-snr-db", type=float, default=2.0)
     ap.add_argument("--max-snr-db", type=float, default=26.0)
+    ap.add_argument("--mix-temperature", type=float, default=2.5,
+                    help="flatten the per-family event mix towards uniform (1.0 = keep it)")
     ap.add_argument("--empty-probability", type=float, default=0.1,
                     help="fraction of runs with no events at all")
     ap.add_argument("--label-hi-db", type=float, default=6.0)
@@ -414,17 +566,26 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--label-margin-db", type=float, default=6.0)
     ap.add_argument("--seed", type=int, default=20260912)
     ap.add_argument("--device", type=str, default=None)
+    ap.add_argument("--workers", type=int, default=1,
+                    help="parallel run builders; 0 uses every allocated core. Runs are "
+                         "independent, so this scales until the single GPU saturates")
+    ap.add_argument("--shard-index", type=int, default=0,
+                    help="with --shard-count, build only this slice of the plan "
+                         "(for a Slurm job array across nodes)")
+    ap.add_argument("--shard-count", type=int, default=1)
+    ap.add_argument("--merge", action="store_true",
+                    help="combine manifest.shard*.json into manifest.json and exit")
     ap.add_argument("--no-components", action="store_true")
     ap.add_argument("--no-qa", action="store_true")
     return ap.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    sd.set_device(args.device)
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
+def build_plan(args) -> list[tuple[str, str, int, int]]:
+    """Every run the dataset will contain, in a fixed order.
 
+    Built before any work starts so that workers and shards all agree on which
+    seed belongs to which run, whatever order they finish in.
+    """
     plan: list[tuple[str, str, int, int]] = []
     # fixed split keys: str.__hash__ is salted per process and would make the
     # seeds -- and so the whole dataset -- irreproducible between runs
@@ -440,18 +601,27 @@ def main() -> None:
                 [args.seed, split_keys[split], index]
             ).generate_state(1)[0])
             plan.append((split, family, index, seed))
+    return plan
 
-    runs = []
-    started = time.time()
-    for position, (split, family, index, seed) in enumerate(plan, start=1):
-        record = build_run(args, split, family, index, seed)
-        runs.append(record)
-        events = len(record["scenario"])
-        print(f"[{position:3d}/{len(plan)}] {split:5s} {family:16s} seed={seed:<12d} "
-              f"events={events} ignore={record['mask_fraction']['ignore']:.3f} "
-              f"({record['seconds']:.1f}s)", flush=True)
 
-    manifest = {
+def _worker(payload):
+    """One run, in its own process.
+
+    Runs are completely independent -- their own seed, their own output
+    directory -- so the only shared resource is the GPU, which serialises the
+    propagation kernels while the wavelet synthesis, labelling and HDF5 writing
+    of other runs proceed on their own cores.
+    """
+    args, split, family, index, seed, threads = payload
+    import torch
+
+    torch.set_num_threads(max(1, threads))
+    sd.set_device(args.device)
+    return build_run(args, split, family, index, seed)
+
+
+def _manifest(args, runs, plan_size, seconds) -> dict:
+    return {
         "generator": "simulate_das.py",
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "argv": sys.argv,
@@ -471,12 +641,13 @@ def main() -> None:
         "train_families": list(TRAIN_FAMILIES),
         "test_families": list(TEST_FAMILIES),
         "split_policy": "by scenario family; test families never appear in train or val",
-        "total_seconds": round(time.time() - started, 1),
+        "planned_runs": plan_size,
+        "total_seconds": round(seconds, 1),
         "runs": runs,
     }
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    print(f"\nwrote {out/'manifest.json'}  ({len(runs)} runs, "
-          f"{manifest['total_seconds']:.0f}s)")
+
+
+def summarise(runs) -> None:
     for split in ("train", "val", "test"):
         rows = [r for r in runs if r["split"] == split]
         if not rows:
@@ -484,9 +655,90 @@ def main() -> None:
         events = sum(len(r["scenario"]) for r in rows)
         ignore = np.mean([r["mask_fraction"]["ignore"] for r in rows])
         background = np.mean([r["mask_fraction"]["background"] for r in rows])
-        print(f"  {split:5s}: {len(rows):3d} runs, {events:3d} events, "
+        print(f"  {split:5s}: {len(rows):4d} runs, {events:5d} events, "
               f"background {background:.1%}, ignore {ignore:.1%}, "
               f"families {sorted({r['family'] for r in rows})}")
+
+
+def merge_shards(out: Path) -> None:
+    """Combine per-shard manifests into the single manifest.json."""
+    shards = sorted(out.glob("manifest.shard*.json"))
+    if not shards:
+        raise SystemExit(f"no manifest.shard*.json under {out}")
+    merged = json.loads(shards[0].read_text())
+    runs = []
+    seconds = 0.0
+    for shard in shards:
+        payload = json.loads(shard.read_text())
+        runs.extend(payload["runs"])
+        seconds = max(seconds, payload["total_seconds"])
+    runs.sort(key=lambda r: (r["split"], r["path"]))
+    merged["runs"] = runs
+    merged["total_seconds"] = seconds
+    merged["merged_from"] = [s.name for s in shards]
+    (out / "manifest.json").write_text(json.dumps(merged, indent=2))
+    print(f"merged {len(shards)} shards -> {out / 'manifest.json'}  ({len(runs)} runs)")
+    summarise(runs)
+
+
+def main() -> None:
+    args = parse_args()
+    out = Path(args.out)
+    if args.merge:
+        merge_shards(out)
+        return
+
+    sd.set_device(args.device)
+    out.mkdir(parents=True, exist_ok=True)
+    plan = build_plan(args)
+    if args.shard_count > 1:
+        plan = plan[args.shard_index :: args.shard_count]
+        print(f"[shard {args.shard_index + 1}/{args.shard_count}] {len(plan)} runs")
+
+    workers = args.workers
+    if workers <= 0:
+        workers = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else 1
+    workers = max(1, min(workers, len(plan)))
+    threads = max(1, (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity")
+                      else 1) // workers)
+
+    runs = []
+    started = time.time()
+    if workers == 1:
+        results = (_worker((args, s, f, i, d, threads)) for s, f, i, d in plan)
+    else:
+        # spawn, not fork: a forked CUDA context is not usable in the child
+        context = mp.get_context("spawn")
+        pool = context.Pool(workers)
+        payloads = [(args, s, f, i, d, threads) for s, f, i, d in plan]
+        results = pool.imap_unordered(_worker, payloads)
+        print(f"[pool] {workers} workers x {threads} torch threads on one GPU")
+
+    for position, record in enumerate(results, start=1):
+        runs.append(record)
+        elapsed = time.time() - started
+        rate = elapsed / position
+        print(f"[{position:4d}/{len(plan)}] {record['split']:5s} {record['family']:16s} "
+              f"seed={record['seed']:<12d} events={len(record['scenario']):2d} "
+              f"ignore={record['mask_fraction']['ignore']:.3f} "
+              f"({record['seconds']:.1f}s, {rate:.1f}s/run, "
+              f"eta {(len(plan) - position) * rate / 60:.0f}m)", flush=True)
+    if workers > 1:
+        pool.close()
+        pool.join()
+
+    runs.sort(key=lambda r: (r["split"], r["path"]))
+    manifest = _manifest(args, runs, len(plan), time.time() - started)
+    name = ("manifest.json" if args.shard_count == 1
+            else f"manifest.shard{args.shard_index:03d}.json")
+    (out / name).write_text(json.dumps(manifest, indent=2))
+    print(f"\nwrote {out / name}  ({len(runs)} runs, "
+          f"{manifest['total_seconds']:.0f}s wall, "
+          f"{sum(r['seconds'] for r in runs):.0f}s of work)")
+    summarise(runs)
+    if args.shard_count > 1:
+        print(f"\nwhen every shard is done: "
+              f"python make_dataset.py --out {out} --merge")
 
 
 if __name__ == "__main__":
