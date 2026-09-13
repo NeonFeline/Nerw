@@ -396,6 +396,10 @@
   .seg button:hover { color: var(--ink); }
   .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line-strong); }
 
+  /* The bottom sheet only exists on phones; on wide screens its panels sit in the grid as before. */
+  .sheet { display: contents; }
+  .sheet-head, .sheet-time { display: none; }
+
   .tooltip {
     position: fixed; z-index: 40; pointer-events: none;
     padding: 8px 10px; max-width: 280px;
@@ -412,35 +416,72 @@
     .event-list { border-right: 0; border-bottom: 1px solid var(--line); }
     .sev-counts { display: none; }
   }
+  /* Phones: the map fills the screen; events, the station line and the clock controls live in a bottom sheet. */
   @media (max-width: 900px) {
-    .dash {
-      position: static; height: auto;
-      grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: none;
-      grid-template-areas: "top" "map" "line" "events";
+    :root { --sheet-peek: 128px; }
+    body { overflow: hidden; }
+    .dash { position: fixed; inset: 0; display: block; padding: 0; }
+    .map-panel { position: fixed; inset: 0; display: block; border: 0; border-radius: 0; }
+    .map-body { position: absolute; inset: 0; border-radius: 0; }
+    .map-panel > .panel-head {
+      position: absolute; top: 10px; right: 58px; z-index: 6;
+      padding: 0; min-height: 0; gap: 6px; border: 0; background: none;
     }
-    .map-body { height: 52vh; min-height: 300px; }
-    .topbar { gap: 8px 12px; }
-    .topbar > .menu-wrap { order: 1; margin-left: auto; }
-    .timebar { order: 2; }
-    .mode-chip { display: none; }
-    /* Collapsed on a phone: just the header bar, opened with a tap. */
-    .dash.events-collapsed { grid-template-columns: minmax(0, 1fr); }
-    .events-collapsed .events .panel-head { flex-direction: row; gap: 10px; padding: 8px 10px 8px 14px; }
-    .events-collapsed .events .sim-tag, .events-collapsed .events .spacer { display: initial; }
-    .events-collapsed #events-title { writing-mode: horizontal-tb; transform: none; }
-    .events-collapsed .active-badge .badge-word { display: inline; }
-    .collapse-btn { width: 34px; height: 34px; }
-    .collapse-btn svg, .events-collapsed .collapse-btn svg { transform: rotate(90deg); }
-    .dash:not(.events-collapsed) .collapse-btn svg { transform: rotate(-90deg); }
-    .events-body { grid-template-rows: none; }
-    .event-list { max-height: 300px; }
-    .line-panel { height: auto; }
-    .strip-scroll { height: 200px; }
-    .timebar { flex-basis: 100%; flex-wrap: wrap; }
-    .map-panel .panel-head, .line-panel .panel-head { flex-wrap: wrap; row-gap: 6px; }
-    #map-summary, .line-sub { order: 10; flex-basis: 100%; white-space: normal; }
+    #map-title, #map-summary, .map-panel > .panel-head > .spacer { display: none; }
+    #focus-exit { position: fixed; top: 58px; left: 50%; transform: translateX(-50%); }
+    .map-panel .tool-btn, #about-btn { height: 38px; min-width: 38px; padding: 0 11px; justify-content: center; border-radius: 19px; box-shadow: var(--shadow); }
+    .map-panel .menu-wrap .btn-label, #about-btn .btn-label { display: none; }
+    .menu { max-height: calc(100dvh - var(--sheet-peek) - 70px); }
+    .zoom { bottom: calc(var(--sheet-peek) + 14px); }
+    .topbar {
+      position: fixed; top: 10px; left: 10px; right: 10px; z-index: 7;
+      flex-wrap: nowrap; justify-content: space-between; pointer-events: none;
+    }
+    .topbar > * { pointer-events: auto; }
+    .clock { padding: 8px 14px; border-radius: 19px; background: var(--overlay); border: 1px solid var(--line); box-shadow: var(--shadow); }
+    .clock-time { font-size: 17px; }
+    .clock-date, .clock-note, .mode-chip, .collapse-btn { display: none; }
+
+    .sheet {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 8;
+      display: flex; flex-direction: column;
+      height: var(--sheet-peek); max-height: 92dvh;
+      padding-bottom: env(safe-area-inset-bottom);
+      background: var(--surface); border-radius: 18px 18px 0 0;
+      box-shadow: 0 -6px 28px rgba(28, 37, 48, 0.16);
+      transition: height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .sheet[data-state="half"] { height: 55dvh; }
+    .sheet[data-state="full"] { height: 90dvh; }
+    .sheet.dragging { transition: none; }
+    .sheet-head { display: block; flex: none; padding: 6px 16px 0; touch-action: none; cursor: grab; }
+    .sheet-handle { display: block; width: 72px; height: 22px; margin: 0 auto; padding: 0; border: 0; background: none; cursor: grab; }
+    .sheet-handle i { display: block; width: 40px; height: 5px; margin: 0 auto; border-radius: 3px; background: var(--line-strong); }
+    .sheet-summary { text-align: center; padding: 2px 0 8px; }
+    .sheet-title { font: 700 18px/1.2 var(--f-display); }
+    .sheet-sub { margin-top: 2px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sheet-tabs { display: flex; margin: 0 -16px; padding: 0 8px; border-bottom: 1px solid var(--line); }
+    .sheet-tabs button {
+      flex: 1; height: 42px; border: 0; background: none; cursor: pointer;
+      font-size: 14px; font-weight: 600; color: var(--ink-3); border-bottom: 2.5px solid transparent;
+    }
+    .sheet-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--now); }
+    .tab-count { margin-left: 5px; font: 600 11.5px var(--f-mono); color: var(--ink-3); }
+    .sheet > .events, .sheet > .line-panel, .sheet-time { display: none; flex: 1 1 auto; min-height: 0; overflow: auto; border: 0; border-radius: 0; }
+    .sheet[data-tab="events"] > .events { display: block; }
+    .sheet[data-tab="line"] > .line-panel { display: block; }
+    .sheet[data-tab="time"] > .sheet-time { display: block; padding: 16px; }
+    .events > .panel-head { display: none; }
+    .events-body { display: flex; flex-direction: column; }
+    .detail { order: -1; overflow: visible; border-bottom: 1px solid var(--line); }
+    .event-list { overflow: visible; border: 0; }
+    .line-panel .panel-head { flex-wrap: wrap; row-gap: 6px; }
+    .line-sub { order: 10; flex-basis: 100%; white-space: normal; }
     .line-status { white-space: normal; text-align: left; }
+    .strip-scroll { height: 210px; }
+    .sheet-date { margin-bottom: 14px; font-size: 13px; color: var(--ink-2); }
+    .sheet-time .timebar { display: grid; gap: 16px; }
+    .sheet-time .time-controls { flex-wrap: wrap; }
   }
   @media (prefers-reduced-motion: reduce) {
     .mode-chip[data-mode="live"] .dot { animation: none; }
@@ -477,7 +518,7 @@
       </div>
     </div>
     <div class="menu-wrap">
-      <button type="button" class="tool-btn" id="about-btn" aria-expanded="false" aria-controls="about-menu">Informacje</button>
+      <button type="button" class="tool-btn" id="about-btn" aria-expanded="false" aria-controls="about-menu" aria-label="Informacje"><svg viewBox="0 0 16 16" class="glyph" aria-hidden="true"><path d="M8 1.8a6.2 6.2 0 1 1 0 12.4a6.2 6.2 0 1 1 0-12.4ZM8 7.3V11.2M8 4.9V5"/></svg><span class="btn-label">Informacje</span></button>
       <div class="menu" id="about-menu" role="dialog" aria-label="O tym panelu" hidden>
         <p><strong>Zdarzenia są symulowane.</strong> Każdy incydent w tym panelu to wymyślony scenariusz umieszczony na prawdziwym torze, który pokazuje, jak mogłyby wyglądać alarmy z czujników światłowodowych. Żaden z nich się nie wydarzył.</p>
         <p><strong>Pociągi jeżdżą według opublikowanego rozkładu.</strong> Pozycje pokazują, gdzie pociąg powinien być według rozkładu. Opóźnienia nie są uwzględniane, a zastępcza komunikacja autobusowa jest pominięta.</p>
@@ -495,7 +536,7 @@
       <button type="button" class="tool-btn" id="focus-exit" hidden>Pokaż wszystkie pociągi</button>
       <div class="menu-wrap">
         <button type="button" class="tool-btn" id="filters-btn" aria-expanded="false" aria-controls="filters-menu">
-          <svg viewBox="0 0 16 16" class="glyph" aria-hidden="true"><path d="M2.5 4h11M4.5 8h7M6.5 12h3"/></svg>Filtry<span class="badge" id="filters-badge" hidden></span>
+          <svg viewBox="0 0 16 16" class="glyph" aria-hidden="true"><path d="M2.5 4h11M4.5 8h7M6.5 12h3"/></svg><span class="btn-label">Filtry</span><span class="badge" id="filters-badge" hidden></span>
         </button>
         <div class="menu" id="filters-menu" role="dialog" aria-label="Filtry" hidden>
           <div class="fgroup">
@@ -528,7 +569,7 @@
         </div>
       </div>
       <div class="menu-wrap">
-        <button type="button" class="tool-btn" id="key-btn" aria-expanded="false" aria-controls="key-menu">Legenda</button>
+        <button type="button" class="tool-btn" id="key-btn" aria-expanded="false" aria-controls="key-menu" aria-label="Legenda"><svg viewBox="0 0 16 16" class="glyph" aria-hidden="true"><path d="M8 2.8L13.8 5.8L8 8.8L2.2 5.8ZM2.2 9.4L8 12.4L13.8 9.4"/></svg><span class="btn-label">Legenda</span></button>
         <div class="menu" id="key-menu" role="dialog" aria-label="Legenda mapy" hidden>
           <ul class="key">
             <li><i class="k-run"></i>Pociąg w drodze</li>
@@ -553,6 +594,21 @@
       </div>
     </div>
   </section>
+
+  <div class="sheet" id="sheet" data-state="peek" data-tab="events">
+    <div class="sheet-head" id="sheet-head">
+      <button type="button" class="sheet-handle" id="sheet-handle" aria-controls="sheet" aria-expanded="false" aria-label="Rozwiń panel"><i></i></button>
+      <div class="sheet-summary" aria-live="polite">
+        <div class="sheet-title" id="sheet-title"></div>
+        <div class="sheet-sub" id="sheet-sub"></div>
+      </div>
+      <div class="sheet-tabs" role="tablist" aria-label="Panel">
+        <button type="button" role="tab" data-tab="events" aria-selected="true">Zdarzenia<span class="tab-count" id="tab-events-count"></span></button>
+        <button type="button" role="tab" data-tab="line" aria-selected="false">Linia</button>
+        <button type="button" role="tab" data-tab="time" aria-selected="false">Czas</button>
+      </div>
+    </div>
+    <div class="sheet-time" id="sheet-time"><div class="sheet-date" id="sheet-date"></div></div>
 
   <section class="panel events" aria-labelledby="events-title">
     <div class="panel-head">
@@ -626,6 +682,7 @@
     <p class="line-empty" id="line-empty">Wybierz zdarzenie lub pociąg, aby zobaczyć stacje na jego linii.</p>
     <div class="strip-scroll" id="strip-scroll"><svg id="strip" role="img" aria-label="Stacje wzdłuż wybranej linii"></svg></div>
   </section>
+  </div>
 </div>
 
 <div class="tooltip" id="tooltip" hidden></div>
@@ -651,14 +708,34 @@
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const mobileMq = window.matchMedia('(max-width: 900px)');
   const dashEl = $('dash');
-  // On a phone the panels stack, so bring the whole panel that just changed into view,
-  // not only its header (the station axis sits at the bottom of the line panel).
-  function revealOnMobile(el) {
-    if (!mobileMq.matches || !el) return;
-    const r = el.getBoundingClientRect();
-    const behavior = reduceMotion.matches ? 'auto' : 'smooth';
-    if (r.top < 0) el.scrollIntoView({ behavior, block: 'start' });
-    else if (r.bottom > window.innerHeight) el.scrollIntoView({ behavior, block: r.height > window.innerHeight ? 'start' : 'end' });
+  // Phones: the map fills the screen and everything else lives in an Airbnb-style bottom sheet
+  // that rests at a peek, half or full height. SHEET_PEEK matches --sheet-peek in the CSS.
+  const sheet = $('sheet');
+  const SHEET_PEEK = 128;
+  const sheetHeight = (state) => (state === 'full' ? Math.round(window.innerHeight * 0.9)
+    : state === 'half' ? Math.round(window.innerHeight * 0.55) : SHEET_PEEK);
+  function setSheet(state) {
+    sheet.dataset.state = state;
+    sheet.style.height = '';
+    const handle = $('sheet-handle');
+    handle.setAttribute('aria-expanded', String(state !== 'peek'));
+    handle.setAttribute('aria-label', state === 'peek' ? 'Rozwiń panel' : state === 'half' ? 'Rozwiń panel na cały ekran' : 'Zwiń panel');
+  }
+  function setSheetTab(tab) {
+    sheet.dataset.tab = tab;
+    for (const b of document.querySelectorAll('.sheet-tabs [data-tab]')) b.setAttribute('aria-selected', String(b.dataset.tab === tab));
+    // Hidden tabs have no size, so draw their contents once they are shown.
+    requestAnimationFrame(() => {
+      if (tab === 'line') buildStrip();
+      if (tab === 'events' && selectedEvent) drawWaterfall(selectedEvent);
+    });
+  }
+  // On a phone, open a tab of the sheet (at least half way). Wide screens show every panel already.
+  function showInSheet(tab) {
+    if (!mobileMq.matches) return;
+    setSheetTab(tab);
+    if (sheet.dataset.state === 'peek') setSheet('half');
+    if (tab === 'events') document.querySelector('.events').scrollTop = 0;
   }
 
   // Polish plural: one (1), few (2-4, 22-24, ...), many (everything else).
@@ -1066,7 +1143,9 @@
 
   // ---------------------------------------------------------------- view
   function fit(animate) {
-    const inset = { top: 18, bottom: 18, left: 16, right: 52 };
+    const inset = mobileMq.matches
+      ? { top: 64, bottom: SHEET_PEEK + 16, left: 12, right: 12 }
+      : { top: 18, bottom: 18, left: 16, right: 52 };
     const x0 = toWX(POLAND.lonMin), x1 = toWX(POLAND.lonMax);
     const y0 = toWY(POLAND.latMax), y1 = toWY(POLAND.latMin);
     const aw = Math.max(80, W - inset.left - inset.right), ah = Math.max(80, H - inset.top - inset.bottom);
@@ -1568,6 +1647,7 @@
       note.hidden = false;
       note.textContent = `Rozkład obowiązuje do ${shortDateFmt.format(ymd(D.feed.end))}. Pokazywany jest rozkład z ${shortDateFmt.format(BASE + day.o * 864e5)}.`;
     } else note.hidden = true;
+    $('sheet-date').textContent = note.hidden ? $('clock-date').textContent : `${$('clock-date').textContent}. ${note.textContent}`;
     $('mode-chip').dataset.mode = time.mode;
     $('mode-label').textContent = time.mode === 'live' ? 'Na żywo' : time.playing ? `Odtwarzanie ${time.speed}×` : 'Pauza';
     const minute = Math.floor(clock.sec / 60);
@@ -1623,6 +1703,7 @@
       if (open) {
         menu.hidden = false;
         btn.setAttribute('aria-expanded', 'true');
+        if (mobileMq.matches) setSheet('peek'); // the sheet would otherwise cover the menu
         const first = menu.querySelector('input, select, button');
         if (first) first.focus({ preventScroll: true });
       }
@@ -1698,6 +1779,17 @@
     mapSummary.title = mapSummary.textContent;
     mapSummary.classList.toggle('focused', !!focus);
     $('focus-exit').hidden = !focus;
+    // The line that stays visible at the top of the phone sheet.
+    const activeEvents = visible.filter((ev) => statusAt(ev, clock.sec) < 3).length;
+    $('tab-events-count').textContent = String(activeEvents);
+    if (focus) {
+      const n = due.id === focus.id ? due.list.length : 0;
+      $('sheet-title').textContent = EVENT_TYPES[focus.type].label;
+      $('sheet-sub').textContent = `${metres(eventMeta(focus).stationM)} od stacji ${eventMeta(focus).station} · ${n} ${trainsWord(n)} w ciągu 90 min`;
+    } else {
+      $('sheet-title').textContent = `${activeEvents} ${plural(activeEvents, 'aktywne zdarzenie', 'aktywne zdarzenia', 'aktywnych zdarzeń')}`;
+      $('sheet-sub').textContent = `${summary} · symulacja`;
+    }
     $('f-summary').textContent = summary;
     const n = activeFilterCount();
     const badge = $('filters-badge');
@@ -1857,7 +1949,7 @@
     const b = ev.target.closest('[data-due]');
     if (!b) return;
     const x = due.list[+b.dataset.due];
-    if (x) { selectTrain(x.e, true); revealOnMobile(document.querySelector('.line-panel')); }
+    if (x) { selectTrain(x.e, true); showInSheet('line'); }
   });
 
   // An illustration of the event's signature on a DAS waterfall, not measured data.
@@ -1966,8 +2058,9 @@
   $('event-list').addEventListener('click', (ev) => {
     const b = ev.target.closest('[data-id]');
     if (!b) return;
+    // On a phone, leave some map above the sheet to show the zoom (set before focusing, which frames around it).
+    if (mobileMq.matches && sheet.dataset.state === 'full') setSheet('half');
     selectEvent(day.events.find((x) => x.id === b.dataset.id) || null, { focus: true });
-    revealOnMobile(document.querySelector('.map-panel'));
   });
 
   // ---------------------------------------------------------------- line view
@@ -2244,10 +2337,14 @@
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const q of pts) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }
     const margin = 60;
-    let s = Math.min((W - 2 * margin) / Math.max(x1 - x0, 1e-9), (H - 2 * margin) / Math.max(y1 - y0, 1e-9));
+    // On a phone the floating buttons cover the top of the map and the sheet its bottom; frame the event between them.
+    const top = mobileMq.matches ? 56 : 0;
+    const bottom = mobileMq.matches ? sheetHeight(sheet.dataset.state) : 0;
+    const visH = Math.max(160, H - top - bottom);
+    let s = Math.min((W - 2 * margin) / Math.max(x1 - x0, 1e-9), (visH - 2 * margin) / Math.max(y1 - y0, 1e-9));
     s = Math.min(Math.max(s, fitS * 1.5), fitS * 40);
     userMoved = true;
-    flyTo((x0 + x1) / 2, (y0 + y1) / 2, s);
+    flyTo((x0 + x1) / 2, (y0 + y1) / 2 + (bottom - top) / 2 / s, s);
   }
   function exitFocus() {
     if (focus) { focus = null; staticDirty = true; }
@@ -2256,6 +2353,7 @@
   $('focus-exit').addEventListener('click', exitFocus);
 
   $('line-locate').addEventListener('click', () => {
+    if (mobileMq.matches) setSheet('peek');
     if (strip && strip.mode === 'event') {
       focus = strip.ev;
       focusSig = '';
@@ -2358,9 +2456,8 @@
     canvas.classList.remove('dragging');
     if (wasClick && ev.type === 'pointerup') {
       const item = itemAt(ev.offsetX, ev.offsetY, ev.pointerType === 'touch');
-      if (item && item.ev) selectEvent(item.ev, { focus: true });
-      else if (item && item.train) selectTrain(item.train);
-      if (item) revealOnMobile(document.querySelector('.line-panel'));
+      if (item && item.ev) { showInSheet('events'); selectEvent(item.ev, { focus: true }); }
+      else if (item && item.train) { selectTrain(item.train); showInSheet('line'); }
     }
     if (pointers.size === 0) drag = null;
     else if (drag) drag.pinch = null;
@@ -2414,13 +2511,67 @@
     if (!collapsed && selectedEvent) requestAnimationFrame(() => drawWaterfall(selectedEvent));
   }
   $('events-toggle').addEventListener('click', () => setEventsCollapsed(!dashEl.classList.contains('events-collapsed')));
-  setEventsCollapsed(mobileMq.matches);
+  setEventsCollapsed(false);
   syncControls();
   new ResizeObserver(resizeMap).observe(canvas.parentElement);
   let stripWidth = 0;
   new ResizeObserver(() => {
     if (Math.abs(stripBox.clientWidth - stripWidth) > 40) { stripWidth = stripBox.clientWidth; buildStrip(); }
   }).observe($('dash'));
+
+  // Phone layout switch: the clock controls move into the sheet's "Czas" tab and back.
+  const timebar = document.querySelector('.timebar');
+  const timebarHome = timebar.parentElement, timebarAfter = timebar.nextElementSibling;
+  function placeForViewport() {
+    if (mobileMq.matches) {
+      $('sheet-time').appendChild(timebar);
+      setEventsCollapsed(false);
+    } else {
+      timebarHome.insertBefore(timebar, timebarAfter);
+    }
+  }
+  mobileMq.addEventListener('change', () => { placeForViewport(); userMoved = false; resizeMap(); buildStrip(); });
+  placeForViewport();
+  setSheet('peek');
+  setSheetTab('events');
+
+  // Drag the sheet by its head; a tap on the head steps peek → half → full → peek.
+  const sheetHead = $('sheet-head');
+  let sheetDrag = null;
+  sheetHead.addEventListener('pointerdown', (ev) => {
+    if (ev.target.closest('.sheet-tabs')) return;
+    sheetDrag = { y: ev.clientY, h: sheet.getBoundingClientRect().height, moved: false };
+    sheetHead.setPointerCapture(ev.pointerId);
+    sheet.classList.add('dragging');
+  });
+  sheetHead.addEventListener('pointermove', (ev) => {
+    if (!sheetDrag) return;
+    const dy = sheetDrag.y - ev.clientY;
+    if (Math.abs(dy) > 6) sheetDrag.moved = true;
+    sheet.style.height = `${Math.min(sheetHeight('full'), Math.max(SHEET_PEEK, sheetDrag.h + dy))}px`;
+  });
+  const endSheetDrag = () => {
+    if (!sheetDrag) return;
+    sheet.classList.remove('dragging');
+    const h = sheet.getBoundingClientRect().height;
+    const next = sheetDrag.moved
+      ? ['peek', 'half', 'full'].reduce((best, s) => (Math.abs(sheetHeight(s) - h) < Math.abs(sheetHeight(best) - h) ? s : best), 'peek')
+      : { peek: 'half', half: 'full', full: 'peek' }[sheet.dataset.state];
+    sheetDrag = null;
+    setSheet(next);
+  };
+  sheetHead.addEventListener('pointerup', endSheetDrag);
+  sheetHead.addEventListener('pointercancel', endSheetDrag);
+  // Keyboard users press the handle button (a pointer tap is already handled above).
+  $('sheet-handle').addEventListener('click', (ev) => {
+    if (ev.detail === 0) setSheet({ peek: 'half', half: 'full', full: 'peek' }[sheet.dataset.state]);
+  });
+  document.querySelector('.sheet-tabs').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-tab]');
+    if (!b) return;
+    setSheetTab(b.dataset.tab);
+    if (sheet.dataset.state === 'peek') setSheet('half');
+  });
   if (document.fonts) document.fonts.ready.then(() => { readTheme(); invalidate(true); if (strip) buildStrip(); });
   resizeMap();
   requestAnimationFrame((t) => { time.last = t; frame(t); });
