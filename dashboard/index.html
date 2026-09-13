@@ -239,6 +239,27 @@
 
   /* ------------------------------------------------------------ events */
   .events { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+  .collapse-btn {
+    width: 28px; height: 28px; flex: none; padding: 0; display: grid; place-items: center;
+    border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); cursor: pointer;
+  }
+  .collapse-btn:hover { background: var(--control); }
+  .collapse-btn svg { width: 14px; height: 14px; }
+  .active-badge {
+    display: none; min-width: 20px; height: 20px; padding: 0 7px; box-sizing: border-box; border-radius: 10px;
+    place-items: center; white-space: nowrap;
+    background: var(--control-hover); color: var(--ink); font: 600 12px/1 var(--f-mono);
+  }
+  .active-badge.has-critical { background: var(--crit); color: var(--crit-ink); }
+  /* Collapsed on a wide screen: the panel becomes a slim rail and the map takes the room. */
+  .dash.events-collapsed { grid-template-columns: minmax(0, 1fr) 52px; }
+  .events-collapsed .events-body { display: none; }
+  .events-collapsed .events .panel-head { flex-direction: column; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 0; }
+  .events-collapsed .events .sev-counts, .events-collapsed .events .sim-tag, .events-collapsed .events .spacer { display: none; }
+  .events-collapsed #events-title { writing-mode: vertical-rl; transform: rotate(180deg); }
+  .events-collapsed .collapse-btn svg { transform: rotate(180deg); }
+  .events-collapsed .active-badge { display: inline-grid; }
+  .events-collapsed .active-badge .badge-word { display: none; }
   .sev-counts { display: flex; gap: 12px; font-size: 12.5px; color: var(--ink-2); }
   .sev-counts span { display: inline-flex; align-items: center; gap: 5px; }
   .sev-counts i { width: 9px; height: 9px; border-radius: 2px; background: var(--sev); }
@@ -396,9 +417,22 @@
       position: static; height: auto;
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: none;
-      grid-template-areas: "top" "map" "events" "line";
+      grid-template-areas: "top" "map" "line" "events";
     }
-    .map-body { height: 60vh; min-height: 320px; }
+    .map-body { height: 52vh; min-height: 300px; }
+    .topbar { gap: 8px 12px; }
+    .topbar > .menu-wrap { order: 1; margin-left: auto; }
+    .timebar { order: 2; }
+    .mode-chip { display: none; }
+    /* Collapsed on a phone: just the header bar, opened with a tap. */
+    .dash.events-collapsed { grid-template-columns: minmax(0, 1fr); }
+    .events-collapsed .events .panel-head { flex-direction: row; gap: 10px; padding: 8px 10px 8px 14px; }
+    .events-collapsed .events .sim-tag, .events-collapsed .events .spacer { display: initial; }
+    .events-collapsed #events-title { writing-mode: horizontal-tb; transform: none; }
+    .events-collapsed .active-badge .badge-word { display: inline; }
+    .collapse-btn { width: 34px; height: 34px; }
+    .collapse-btn svg, .events-collapsed .collapse-btn svg { transform: rotate(90deg); }
+    .dash:not(.events-collapsed) .collapse-btn svg { transform: rotate(-90deg); }
     .events-body { grid-template-rows: none; }
     .event-list { max-height: 300px; }
     .line-panel { height: auto; }
@@ -522,12 +556,16 @@
 
   <section class="panel events" aria-labelledby="events-title">
     <div class="panel-head">
+      <button type="button" class="collapse-btn" id="events-toggle" aria-expanded="true" aria-controls="events-body" aria-label="Zwiń panel zdarzeń" title="Zwiń panel zdarzeń">
+        <svg class="glyph" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+      </button>
       <h2 id="events-title">Zdarzenia</h2>
+      <span class="active-badge" id="events-active"></span>
       <span class="sev-counts" id="sev-counts"></span>
       <span class="spacer"></span>
       <span class="sim-tag" title="Każde zdarzenie tutaj to wymyślony scenariusz">Symulacja</span>
     </div>
-    <div class="events-body">
+    <div class="events-body" id="events-body">
       <ul class="event-list" id="event-list" aria-label="Dzisiejsze zdarzenia"></ul>
       <div class="detail" id="detail">
         <p class="detail-empty" id="detail-empty">Wybierz zdarzenie z listy lub na mapie.</p>
@@ -611,6 +649,17 @@
   const CLASS_LABELS = ['Dalekobieżne', 'Regionalne', 'Podmiejskie'];
   const POLAND = { lonMin: 14.07, lonMax: 24.15, latMin: 49.0, latMax: 54.84 };
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const mobileMq = window.matchMedia('(max-width: 900px)');
+  const dashEl = $('dash');
+  // On a phone the panels stack, so bring the whole panel that just changed into view,
+  // not only its header (the station axis sits at the bottom of the line panel).
+  function revealOnMobile(el) {
+    if (!mobileMq.matches || !el) return;
+    const r = el.getBoundingClientRect();
+    const behavior = reduceMotion.matches ? 'auto' : 'smooth';
+    if (r.top < 0) el.scrollIntoView({ behavior, block: 'start' });
+    else if (r.bottom > window.innerHeight) el.scrollIntoView({ behavior, block: r.height > window.innerHeight ? 'start' : 'end' });
+  }
 
   // Polish plural: one (1), few (2-4, 22-24, ...), many (everything else).
   function plural(n, one, few, many) {
@@ -1808,7 +1857,7 @@
     const b = ev.target.closest('[data-due]');
     if (!b) return;
     const x = due.list[+b.dataset.due];
-    if (x) selectTrain(x.e, true);
+    if (x) { selectTrain(x.e, true); revealOnMobile(document.querySelector('.line-panel')); }
   });
 
   // An illustration of the event's signature on a DAS waterfall, not measured data.
@@ -1888,6 +1937,10 @@
     const rows = visible.map((ev) => ({ ev, s: statusAt(ev, t) }))
       .sort((a, b) => (a.s === 3) - (b.s === 3) || SEVERITY[b.ev.severity].rank - SEVERITY[a.ev.severity].rank || b.ev.start - a.ev.start);
     const active = rows.filter((r) => r.s < 3);
+    const badge = $('events-active');
+    badge.innerHTML = `${active.length}<span class="badge-word">&nbsp;${plural(active.length, 'aktywne', 'aktywne', 'aktywnych')}</span>`;
+    badge.classList.toggle('has-critical', active.some((r) => r.ev.severity === 'critical'));
+    badge.title = `Aktywne zdarzenia: ${active.length}`;
     $('sev-counts').innerHTML = SEV_KEYS.map((k) => {
       const n = active.filter((r) => r.ev.severity === k).length;
       const f = SEVERITY[k].forms;
@@ -1914,6 +1967,7 @@
     const b = ev.target.closest('[data-id]');
     if (!b) return;
     selectEvent(day.events.find((x) => x.id === b.dataset.id) || null, { focus: true });
+    revealOnMobile(document.querySelector('.map-panel'));
   });
 
   // ---------------------------------------------------------------- line view
@@ -2306,6 +2360,7 @@
       const item = itemAt(ev.offsetX, ev.offsetY, ev.pointerType === 'touch');
       if (item && item.ev) selectEvent(item.ev, { focus: true });
       else if (item && item.train) selectTrain(item.train);
+      if (item) revealOnMobile(document.querySelector('.line-panel'));
     }
     if (pointers.size === 0) drag = null;
     else if (drag) drag.pinch = null;
@@ -2348,6 +2403,18 @@
   setupMenu('about-btn', 'about-menu');
   setupMenu('filters-btn', 'filters-menu');
   setupMenu('key-btn', 'key-menu');
+  // The events panel collapses: to a rail beside the map on wide screens, to its header bar on phones (the default there).
+  function setEventsCollapsed(collapsed) {
+    dashEl.classList.toggle('events-collapsed', collapsed);
+    const btn = $('events-toggle');
+    const label = collapsed ? 'Rozwiń panel zdarzeń' : 'Zwiń panel zdarzeń';
+    btn.setAttribute('aria-expanded', String(!collapsed));
+    btn.setAttribute('aria-label', label);
+    btn.title = label;
+    if (!collapsed && selectedEvent) requestAnimationFrame(() => drawWaterfall(selectedEvent));
+  }
+  $('events-toggle').addEventListener('click', () => setEventsCollapsed(!dashEl.classList.contains('events-collapsed')));
+  setEventsCollapsed(mobileMq.matches);
   syncControls();
   new ResizeObserver(resizeMap).observe(canvas.parentElement);
   let stripWidth = 0;
