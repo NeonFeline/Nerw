@@ -15,10 +15,10 @@ data/**
 # Training artifacts (checkpoints, scores, logs)
 runs/
 
-# Rail dashboard: the GTFS feed (~96 MB) and the data file built from it (~8 MB).
+# Rail dashboard GTFS feed (~96 MB). dashboard/rail_data.js, built from it, is
+# committed because the Render static site serves dashboard/ as-is.
 # Rebuild with: uv run python dashboard/build_rail_data.py
 polish_trains/
-dashboard/rail_data.js
 
 # Python
 __pycache__/

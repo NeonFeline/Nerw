@@ -119,7 +119,7 @@ The split is by **site family**, not by seed. `SITE_FAMILIES` holds each family'
 
 ## Rail dashboard
 
-`dashboard/index.html` is one self-contained page (no build step, no framework). It loads `dashboard/rail_data.js`, which `dashboard/build_rail_data.py` packs from a GTFS feed unzipped into `polish_trains/`. Both the feed and the generated file are gitignored.
+`dashboard/index.html` is one self-contained page (no build step, no framework). It loads `dashboard/rail_data.js`, which `dashboard/build_rail_data.py` packs from a GTFS feed unzipped into `polish_trains/`. The feed is gitignored; the generated file is committed, because the Render static site serves `dashboard/` as it is, with no build step. Rebuild and commit it when the timetable should be refreshed (the feed covers about a month).
 
 ```bash
 uv run python dashboard/build_rail_data.py --gtfs polish_trains --out dashboard/rail_data.js   # ~20 s
