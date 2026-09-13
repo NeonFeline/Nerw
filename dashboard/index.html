@@ -1,0 +1,2314 @@
+<title>Mapa kolejowa Nerw</title>
+<meta name="description" content="Panel monitoringu kolei: pociągi pasażerskie w Polsce według rozkładu oraz symulowane zdarzenia przy torach.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sofia+Sans+Condensed:wght@500;600;700;800&family=Sofia+Sans:wght@400;500;600;700&display=swap">
+<style>
+  [hidden] { display: none !important; }
+  :root {
+    color-scheme: light;
+    /* One light theme: light grey grounds, blue for trains and routes, orange only where something needs to pop. */
+    --page: #e8eaed;
+    --surface: #f8f9fa;
+    --surface-2: #eef0f2;
+    --sea: #dde2e8;
+    --land-abroad: #eceef1;
+    --land: #fbfbfc;
+    --border-home: #8f99a5;
+    --border-abroad: #c7cdd4;
+    --rail: #b0b8c1;
+    --ink: #1c2530;
+    --ink-2: #4b5562;
+    --ink-3: #717b87;
+    --halo: #fbfbfc;
+    --line: rgba(28, 37, 48, 0.1);
+    --line-strong: rgba(28, 37, 48, 0.2);
+    --overlay: rgba(248, 249, 250, 0.94);
+    --control: rgba(28, 37, 48, 0.06);
+    --control-hover: rgba(28, 37, 48, 0.11);
+    --shadow: 0 2px 6px rgba(28, 37, 48, 0.08), 0 12px 32px rgba(28, 37, 48, 0.14);
+    --signal: #f57c22;
+    --signal-ink: #2a1300;
+    --now: #ee6f12;
+    --train: #2466d1;
+    --route: #133f8a;
+    --flow: #2466d1;
+    --crit: #d03b3b;
+    --crit-ink: #ffffff;
+    --crit-bg: #fde9e8;
+    --crit-bg-hover: #fbdad8;
+    --serious: #ec835a;
+    --serious-ink: #2a1206;
+    --warn: #fab219;
+    --warn-ink: #231a00;
+    --f-display: "Sofia Sans Condensed", "Roboto Condensed", "Arial Narrow", sans-serif;
+    --f-ui: "Sofia Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 14px/1.4 var(--f-ui);
+    -webkit-font-smoothing: antialiased;
+  }
+  @media (min-width: 901px) { body { overflow: hidden; } }
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+  .mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+  .eyebrow {
+    margin: 0;
+    font: 600 11px/1.2 var(--f-display);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .glyph { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .sev-critical { --sev: var(--crit); --sev-ink: var(--crit-ink); }
+  .sev-serious { --sev: var(--serious); --sev-ink: var(--serious-ink); }
+  .sev-warning { --sev: var(--warn); --sev-ink: var(--warn-ink); }
+
+  /* ------------------------------------------------------------ grid */
+  .dash {
+    position: fixed; inset: 0;
+    box-sizing: border-box;
+    padding-block: 12px;
+    padding-inline: 16px;
+    display: grid;
+    gap: 10px;
+    grid-template-columns: minmax(0, 1.15fr) minmax(420px, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) clamp(180px, 24vh, 230px);
+    grid-template-areas:
+      "top top"
+      "map events"
+      "line events";
+  }
+  .topbar { grid-area: top; }
+  .map-panel { grid-area: map; }
+  .line-panel { grid-area: line; }
+  .events { grid-area: events; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; min-width: 0; min-height: 0; }
+  .panel-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--line); min-height: 34px; }
+  .panel-head h2 { margin: 0; font: 700 17px/1 var(--f-display); }
+  .panel-head .spacer { flex: 1; }
+  .muted { color: var(--ink-3); font-size: 12.5px; }
+
+  /* ------------------------------------------------------------ top bar */
+  .topbar { display: flex; align-items: center; gap: 10px 20px; flex-wrap: wrap; }
+  .clock { display: grid; gap: 3px; }
+  .clock-row { display: flex; align-items: center; gap: 10px; }
+  .clock-time { font: 500 24px/1 var(--f-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .clock-date { font-size: 12.5px; color: var(--ink-2); }
+  .clock-note { font-size: 12px; color: var(--ink-3); max-width: 36ch; }
+  .mode-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 8px 3px 7px; border-radius: 3px;
+    font: 700 11px/1.1 var(--f-display); letter-spacing: 0.12em; text-transform: uppercase;
+    background: var(--signal); color: var(--signal-ink); white-space: nowrap;
+  }
+  .mode-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .mode-chip[data-mode="live"] .dot { animation: pulse 2s ease-in-out infinite; }
+  .mode-chip[data-mode="replay"] { background: var(--control-hover); color: var(--ink); }
+  @keyframes pulse { 50% { opacity: 0.25; } }
+  .timebar { flex: 1 1 420px; display: flex; align-items: center; gap: 14px; min-width: 0; }
+  .time-controls { display: flex; align-items: center; gap: 6px; }
+  .live-btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    height: 32px; padding: 0 12px; border-radius: 4px; border: 0; cursor: pointer;
+    background: var(--control); font: 700 13px/1 var(--f-display); letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap;
+  }
+  .live-btn .dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px currentColor; }
+  .live-btn:hover { background: var(--control-hover); }
+  .live-btn[aria-pressed="true"] { background: var(--signal); color: var(--signal-ink); }
+  .live-btn[aria-pressed="true"] .dot { background: currentColor; }
+  .icon-btn {
+    width: 32px; height: 32px; display: grid; place-items: center; padding: 0;
+    border: 0; border-radius: 4px; background: var(--control); cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--control-hover); }
+  .icon-btn svg { width: 12px; height: 12px; fill: currentColor; }
+  .speeds { display: inline-flex; border-radius: 4px; background: var(--control); padding: 2px; }
+  .speeds button {
+    border: 0; background: transparent; cursor: pointer; border-radius: 3px;
+    height: 28px; padding: 0 9px; font: 500 12px/1 var(--f-mono); color: var(--ink-2);
+  }
+  .speeds button:hover { color: var(--ink); }
+  .speeds button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line-strong); }
+  .slider { flex: 1 1 auto; min-width: 160px; display: grid; gap: 2px; }
+  #time-slider {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 20px; margin: 0; background: transparent; cursor: pointer;
+  }
+  #time-slider::-webkit-slider-runnable-track {
+    height: 4px; border-radius: 2px;
+    background: linear-gradient(to right, var(--now) var(--pct, 0%), var(--control-hover) var(--pct, 0%));
+  }
+  #time-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 16px; height: 16px; margin-top: -6px; border-radius: 50%;
+    background: var(--now); border: 2px solid var(--page); box-shadow: 0 0 0 1px var(--line-strong);
+  }
+  #time-slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--control-hover); }
+  #time-slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--now); }
+  #time-slider::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--now); border: 2px solid var(--page); }
+  .slider-ticks { display: flex; justify-content: space-between; padding: 0 2px; font: 10px/1 var(--f-mono); color: var(--ink-3); }
+
+  .tool-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 10px; border-radius: 4px; cursor: pointer;
+    border: 1px solid var(--line-strong); background: var(--surface); font-size: 13px; font-weight: 600; white-space: nowrap;
+  }
+  .tool-btn:hover { background: var(--control); }
+  .tool-btn[aria-expanded="true"] { background: var(--surface-2); }
+  .tool-btn svg { width: 14px; height: 14px; }
+  .badge {
+    min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px;
+    display: inline-grid; place-items: center;
+    background: var(--signal); color: var(--signal-ink); font: 700 11px/1 var(--f-mono);
+  }
+  .menu-wrap { position: relative; }
+  .menu {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+    width: 340px; max-width: calc(100vw - 32px); box-sizing: border-box;
+    max-height: min(560px, calc(100vh - 120px)); overflow: auto;
+    padding: 14px; display: grid; gap: 14px;
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px; box-shadow: var(--shadow);
+    font-size: 13px; color: var(--ink-2);
+  }
+  .menu p { margin: 0; }
+  .menu strong { color: var(--ink); font-weight: 600; }
+  .fgroup { display: grid; gap: 6px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    height: 30px; padding: 0 10px; border-radius: 4px;
+    border: 1px solid var(--line-strong); background: transparent; cursor: pointer;
+    font-size: 13px; white-space: nowrap; color: var(--ink);
+  }
+  .chip:hover { background: var(--control); }
+  .chip[aria-pressed="true"] { background: var(--surface-2); }
+  .chip[aria-pressed="false"] { color: var(--ink-3); border-style: dashed; }
+  .chip .n { font: 500 12px/1 var(--f-mono); font-variant-numeric: tabular-nums; color: var(--ink-3); }
+  .type-mark {
+    width: 20px; height: 20px; border-radius: 5px; flex: none;
+    display: grid; place-items: center; background: var(--ink-2); color: var(--surface);
+  }
+  .type-mark svg { width: 13px; height: 13px; }
+  .chip[aria-pressed="false"] .type-mark { background: transparent; color: var(--ink-3); box-shadow: inset 0 0 0 1.5px var(--ink-3); }
+  .field {
+    width: 100%; height: 32px; box-sizing: border-box; border-radius: 4px;
+    border: 1px solid var(--line-strong); background: var(--surface); padding: 0 10px; font-size: 13px;
+  }
+  .menu-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .text-btn { border: 0; background: none; color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; padding: 4px; font-size: 12.5px; }
+  .text-btn:hover { color: var(--ink); }
+  .key { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .key li { display: grid; grid-template-columns: 26px 1fr; align-items: center; gap: 8px; }
+  .key i { display: block; justify-self: center; }
+  .key .k-run { width: 18px; height: 7px; border-radius: 4px; background: var(--train); }
+  .key .k-stop { width: 18px; height: 7px; border-radius: 4px; box-shadow: inset 0 0 0 2px var(--train); }
+  .key .k-route { width: 22px; height: 4px; border-radius: 2px; background: var(--route); }
+  .key .k-due { width: 14px; height: 14px; border-radius: 50%; border: 1.5px dashed var(--ink); box-sizing: border-box; }
+  .key .mk { width: 20px; height: 20px; }
+  .key .mk svg { width: 13px; height: 13px; }
+
+  /* ------------------------------------------------------------ map */
+  .map-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+  .map-body { position: relative; overflow: hidden; background: var(--sea); border-radius: 0 0 6px 6px; }
+  #map { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  #map.dragging { cursor: grabbing; }
+  #map.over-item { cursor: pointer; }
+  #map-summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  #map-summary.focused { color: var(--ink); }
+  .zoom {
+    position: absolute; right: 10px; bottom: 10px;
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--overlay); border: 1px solid var(--line); border-radius: 4px;
+  }
+  .zoom button { min-width: 34px; height: 32px; padding: 0 4px; border: 0; background: transparent; cursor: pointer; font: 600 17px/1 var(--f-ui); display: grid; place-items: center; }
+  .zoom button + button { border-top: 1px solid var(--line); }
+  .zoom button:hover { background: var(--control); }
+  .zoom .fit { font: 700 10px/1 var(--f-display); letter-spacing: 0.06em; text-transform: uppercase; }
+
+  /* ------------------------------------------------------------ events */
+  .events { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+  .sev-counts { display: flex; gap: 12px; font-size: 12.5px; color: var(--ink-2); }
+  .sev-counts span { display: inline-flex; align-items: center; gap: 5px; }
+  .sev-counts i { width: 9px; height: 9px; border-radius: 2px; background: var(--sev); }
+  .sev-counts b { font: 600 12.5px/1 var(--f-mono); color: var(--ink); }
+  .sim-tag {
+    font: 700 10.5px/1 var(--f-display); letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 4px 6px; border-radius: 3px; border: 1px dashed var(--ink-3); color: var(--ink-2); white-space: nowrap;
+  }
+  .events-body { display: grid; grid-template-columns: minmax(230px, 0.8fr) minmax(0, 1.2fr); min-height: 0; }
+  .event-list { list-style: none; margin: 0; padding: 6px; overflow: auto; border-right: 1px solid var(--line); min-height: 0; }
+  .event-list li + li { margin-top: 2px; }
+  .list-label { padding: 8px 8px 4px; }
+  .ev-row {
+    width: 100%; display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+    padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer;
+  }
+  .ev-row:hover { background: var(--control); }
+  .ev-row[aria-current="true"] { background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line-strong); }
+  .ev-row.sev-critical:not(.cleared) { background: var(--crit-bg); }
+  .ev-row.sev-critical:not(.cleared):hover { background: var(--crit-bg-hover); }
+  .ev-row.sev-critical:not(.cleared)[aria-current="true"] { background: var(--crit-bg-hover); box-shadow: inset 0 0 0 1.5px var(--crit); }
+  .mk { width: 22px; height: 22px; border-radius: 5px; display: grid; place-items: center; background: var(--sev); color: var(--sev-ink); }
+  .mk svg { width: 14px; height: 14px; }
+  .ev-row.cleared .mk, .mk.cleared { background: transparent; color: var(--ink-3); box-shadow: inset 0 0 0 1.5px var(--ink-3); }
+  .ev-title { display: block; font: 600 14px/1.15 var(--f-display); }
+  .ev-row.cleared .ev-title { color: var(--ink-2); }
+  .ev-sub { display: block; font-size: 12px; color: var(--ink-3); overflow-wrap: anywhere; }
+  .ev-when { text-align: right; font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+  .ev-when .mono { display: block; font-size: 12px; color: var(--ink-2); }
+
+  .detail { overflow: auto; min-height: 0; }
+  .detail-empty { margin: 0; padding: 16px; color: var(--ink-3); }
+  .detail-body { padding: 14px 16px 16px; display: grid; gap: 12px; align-content: start; }
+  .pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; box-sizing: border-box; padding: 0 9px; border-radius: 12px; font: 600 12.5px/1 var(--f-ui); white-space: nowrap; }
+  .pill.sev { background: var(--sev); color: var(--sev-ink); padding-left: 6px; }
+  .pill.sev svg { width: 14px; height: 14px; }
+  .pill.status { background: var(--surface-2); border: 1px solid var(--line-strong); }
+  .pill.status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
+  .pill.status[data-status="0"] .dot { background: var(--sev); }
+  .pill.status[data-status="1"] .dot { background: var(--ink-2); }
+  .pill.status[data-status="2"] .dot { background: var(--ink); }
+  .pill.status[data-status="3"] .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink-3); }
+  .detail h3 { margin: 0; font: 700 26px/1.05 var(--f-display); text-wrap: balance; }
+  .detail-where { font-size: 14px; color: var(--ink); }
+  .detail-when { font-size: 13px; color: var(--ink-2); margin-top: -8px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .btn {
+    height: 32px; padding: 0 12px; border-radius: 4px; cursor: pointer;
+    border: 1px solid var(--line-strong); background: var(--surface); font-weight: 600; font-size: 13px;
+  }
+  .btn:hover:not(:disabled) { background: var(--control); }
+  .btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .btn.primary:hover:not(:disabled) { background: var(--ink-2); }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .section-head .count { font-size: 12px; color: var(--ink-3); text-align: right; }
+  .due { list-style: none; margin: -4px 0 0; padding: 0; display: grid; gap: 1px; }
+  .due-row {
+    width: 100%; display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 10px; align-items: center;
+    padding: 6px; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer;
+  }
+  .due-row:hover { background: var(--control); }
+  .due-row[aria-current="true"] { background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line-strong); }
+  .eta { display: inline-flex; align-items: center; gap: 6px; font: 500 13px/1.1 var(--f-mono); font-variant-numeric: tabular-nums; }
+  .eta.soon::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--sev); flex: none; }
+  .due-who { min-width: 0; }
+  .due-who strong { display: block; font: 600 14.5px/1.15 var(--f-display); }
+  .due-who span { display: block; font-size: 12px; color: var(--ink-3); }
+  .empty-note { margin: 0; font-size: 13px; color: var(--ink-3); }
+  details.more { border-top: 1px solid var(--line); padding-top: 10px; }
+  details.more summary {
+    cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between;
+    font: 600 11px/1.2 var(--f-display); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2);
+  }
+  details.more summary::-webkit-details-marker { display: none; }
+  details.more summary::after { content: "+"; font: 500 16px/1 var(--f-mono); color: var(--ink-3); }
+  details.more[open] summary::after { content: "−"; }
+  details.more > :not(summary) { margin-top: 12px; }
+  .facts { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  .facts > div { min-width: 0; }
+  .facts .wide { grid-column: 1 / -1; }
+  .facts dt { font: 600 10.5px/1.2 var(--f-display); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+  .facts dd { margin: 3px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+  .lede { margin: 0; color: var(--ink-2); font-size: 13px; }
+  .waterfall { margin: 0; display: grid; gap: 4px; }
+  .waterfall canvas { width: 100%; height: 100px; display: block; border-radius: 4px; background: var(--surface-2); }
+  .wf-axis { display: flex; justify-content: space-between; font: 10.5px/1 var(--f-mono); color: var(--ink-3); }
+  .waterfall figcaption { font-size: 12px; color: var(--ink-3); }
+  .log { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .log li { display: grid; grid-template-columns: 44px 1fr; gap: 10px; font-size: 12.5px; color: var(--ink-2); }
+  .log .t { font: 500 12px/1.4 var(--f-mono); color: var(--ink); }
+
+  /* ------------------------------------------------------------ line view */
+  .line-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+  .line-panel .panel-head h2 { white-space: nowrap; }
+  .line-sub { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .line-status { font-size: 12.5px; color: var(--ink); text-align: right; white-space: nowrap; flex: none; }
+  .line-panel .seg, #line-locate { flex: none; }
+  .line-empty { margin: 0; padding: 14px; color: var(--ink-3); }
+  .strip-scroll { overflow-x: auto; overflow-y: hidden; min-height: 0; }
+  #strip { display: block; }
+  .st-base { stroke: var(--rail); stroke-width: 4; stroke-linecap: round; }
+  .st-progress { fill: none; stroke: var(--route); stroke-width: 4; stroke-linecap: round; }
+  .st-dot { fill: var(--surface); stroke: var(--ink-2); stroke-width: 1.8; }
+  .st.passed .st-dot { fill: var(--ink-3); stroke: var(--ink-3); }
+  .st.current .st-dot, .st.next .st-dot { stroke: var(--ink); stroke-width: 2.6; }
+  .st-name { font: 600 12.5px var(--f-display); fill: var(--ink); }
+  .st.passed .st-name { fill: var(--ink-3); }
+  .st.next .st-name, .st.current .st-name { font-weight: 800; }
+  .st-time { font: 10.5px var(--f-mono); fill: var(--ink-2); }
+  .st-time.dep { fill: var(--ink-3); }
+  .st.passed .st-time { fill: var(--ink-3); }
+  .st-train { fill: var(--train); stroke: var(--surface); stroke-width: 2.5; }
+  .st-train.stopped { fill: var(--surface); stroke: var(--train); stroke-width: 3; }
+  .st-event { cursor: pointer; }
+  .st-event rect { fill: var(--sev); stroke: var(--surface); stroke-width: 2; }
+  .st-event use { color: var(--sev-ink); }
+  .st-event.selected rect { stroke: var(--signal); stroke-width: 3; }
+  .st-event-line { stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 3 4; }
+  .st-mark rect { fill: var(--sev); stroke: var(--surface); stroke-width: 2.5; }
+  .st-mark use { color: var(--sev-ink); }
+  .st-dist { font: 10.5px var(--f-mono); fill: var(--ink-3); }
+  .st-due { cursor: pointer; }
+  .st-due rect { fill: var(--train); stroke: var(--surface); stroke-width: 2.5; }
+  .st-due path { fill: var(--train); }
+  .st-due text { font: 600 12px var(--f-display); fill: var(--ink); }
+  .st-due .eta-t { font: 500 11px var(--f-mono); fill: var(--ink-2); }
+  .st-due.selected rect { stroke: var(--signal); stroke-width: 3; }
+  .seg { display: inline-flex; border-radius: 4px; background: var(--control); padding: 2px; }
+  .seg button { border: 0; background: transparent; cursor: pointer; border-radius: 3px; height: 26px; padding: 0 9px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+  .seg button:hover { color: var(--ink); }
+  .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line-strong); }
+
+  .tooltip {
+    position: fixed; z-index: 40; pointer-events: none;
+    padding: 8px 10px; max-width: 280px;
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: 5px; box-shadow: var(--shadow);
+    font-size: 12.5px; color: var(--ink-2);
+  }
+  .tooltip strong { display: block; font: 600 15px/1.2 var(--f-display); color: var(--ink); }
+  .load-error { padding: 48px 16px; text-align: center; color: var(--ink-2); }
+  .load-error code { font-family: var(--f-mono); color: var(--ink); }
+
+  @media (max-width: 1360px) {
+    .dash { grid-template-columns: minmax(0, 1.2fr) minmax(360px, 1fr); }
+    .events-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 0.85fr) minmax(0, 1.15fr); }
+    .event-list { border-right: 0; border-bottom: 1px solid var(--line); }
+    .sev-counts { display: none; }
+  }
+  @media (max-width: 900px) {
+    .dash {
+      position: static; height: auto;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: none;
+      grid-template-areas: "top" "map" "events" "line";
+    }
+    .map-body { height: 60vh; min-height: 320px; }
+    .events-body { grid-template-rows: none; }
+    .event-list { max-height: 300px; }
+    .line-panel { height: 240px; }
+    .timebar { flex-basis: 100%; flex-wrap: wrap; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mode-chip[data-mode="live"] .dot { animation: none; }
+  }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" id="glyph-defs"></svg>
+
+<div class="dash" id="dash">
+  <header class="topbar">
+    <div class="clock">
+      <div class="clock-row">
+        <span class="clock-time" id="clock-time">--:--:--</span>
+        <span class="mode-chip" id="mode-chip" data-mode="live"><i class="dot"></i><span id="mode-label">Na żywo</span></span>
+      </div>
+      <div class="clock-date" id="clock-date">&nbsp;</div>
+      <div class="clock-note" id="clock-note" hidden></div>
+    </div>
+    <div class="timebar">
+      <div class="time-controls">
+        <button type="button" class="live-btn" id="live-btn" aria-pressed="true"><i class="dot"></i>Na żywo</button>
+        <button type="button" class="icon-btn" id="play-btn" aria-label="Wstrzymaj">
+          <svg viewBox="0 0 12 12" aria-hidden="true" id="play-icon"></svg>
+        </button>
+        <div class="speeds" role="group" aria-label="Prędkość odtwarzania">
+          <button type="button" data-speed="1" aria-pressed="true" title="Czas rzeczywisty">1×</button>
+          <button type="button" data-speed="60" aria-pressed="false" title="Minuta na sekundę">60×</button>
+          <button type="button" data-speed="600" aria-pressed="false" title="Dziesięć minut na sekundę">600×</button>
+        </div>
+      </div>
+      <div class="slider">
+        <input type="range" id="time-slider" min="0" max="1439" step="1" value="0" aria-label="Pora dnia">
+        <div class="slider-ticks" aria-hidden="true"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+      </div>
+    </div>
+    <div class="menu-wrap">
+      <button type="button" class="tool-btn" id="about-btn" aria-expanded="false" aria-controls="about-menu">Informacje</button>
+      <div class="menu" id="about-menu" role="dialog" aria-label="O tym panelu" hidden>
+        <p><strong>Zdarzenia są symulowane.</strong> Każdy incydent w tym panelu to wymyślony scenariusz umieszczony na prawdziwym torze, który pokazuje, jak mogłyby wyglądać alarmy z czujników światłowodowych. Żaden z nich się nie wydarzył.</p>
+        <p><strong>Pociągi jeżdżą według opublikowanego rozkładu.</strong> Pozycje pokazują, gdzie pociąg powinien być według rozkładu. Opóźnienia nie są uwzględniane, a zastępcza komunikacja autobusowa jest pominięta.</p>
+        <p id="about-feed"></p>
+        <p>Granice państw i linia brzegowa: Natural Earth.</p>
+      </div>
+    </div>
+  </header>
+
+  <section class="panel map-panel" aria-labelledby="map-title">
+    <div class="panel-head">
+      <h2 id="map-title">Mapa</h2>
+      <span class="muted" id="map-summary" aria-live="polite"></span>
+      <span class="spacer"></span>
+      <button type="button" class="tool-btn" id="focus-exit" hidden>Pokaż wszystkie pociągi</button>
+      <div class="menu-wrap">
+        <button type="button" class="tool-btn" id="filters-btn" aria-expanded="false" aria-controls="filters-menu">
+          <svg viewBox="0 0 16 16" class="glyph" aria-hidden="true"><path d="M2.5 4h11M4.5 8h7M6.5 12h3"/></svg>Filtry<span class="badge" id="filters-badge" hidden></span>
+        </button>
+        <div class="menu" id="filters-menu" role="dialog" aria-label="Filtry" hidden>
+          <div class="fgroup">
+            <label class="eyebrow" for="f-query">Znajdź pociąg</label>
+            <input class="field" id="f-query" type="search" placeholder="Numer, nazwa lub stacja" autocomplete="off">
+          </div>
+          <div class="fgroup">
+            <span class="eyebrow" id="f-classes-label">Rodzaj pociągu</span>
+            <div class="chips" id="f-classes" role="group" aria-labelledby="f-classes-label"></div>
+          </div>
+          <div class="fgroup">
+            <label class="eyebrow" for="f-operator">Przewoźnik</label>
+            <select class="field" id="f-operator"></select>
+          </div>
+          <div class="fgroup">
+            <span class="eyebrow" id="f-state-label">Stan pociągu</span>
+            <div class="chips" role="group" aria-labelledby="f-state-label">
+              <button type="button" class="chip" id="f-running" aria-pressed="true">W drodze</button>
+              <button type="button" class="chip" id="f-platform" aria-pressed="true">Na peronie</button>
+            </div>
+          </div>
+          <div class="fgroup">
+            <span class="eyebrow" id="f-events-label">Rodzaje zdarzeń</span>
+            <div class="chips" id="f-events" role="group" aria-labelledby="f-events-label"></div>
+          </div>
+          <div class="menu-foot">
+            <span class="muted" id="f-summary"></span>
+            <button type="button" class="text-btn" id="f-reset">Wyczyść filtry</button>
+          </div>
+        </div>
+      </div>
+      <div class="menu-wrap">
+        <button type="button" class="tool-btn" id="key-btn" aria-expanded="false" aria-controls="key-menu">Legenda</button>
+        <div class="menu" id="key-menu" role="dialog" aria-label="Legenda mapy" hidden>
+          <ul class="key">
+            <li><i class="k-run"></i>Pociąg w drodze</li>
+            <li><i class="k-stop"></i>Pociąg na peronie</li>
+            <li><i class="k-route"></i>Trasa wybranego pociągu</li>
+            <li><i class="k-due"></i>Pociąg nadjeżdżający do wybranego zdarzenia</li>
+            <li><span class="mk sev-critical" id="key-critical"></span>Zdarzenie krytyczne</li>
+            <li><span class="mk sev-serious" id="key-serious"></span>Zdarzenie poważne</li>
+            <li><span class="mk sev-warning" id="key-warning"></span>Ostrzeżenie</li>
+            <li><span class="mk cleared" id="key-cleared"></span>Zamknięte w ciągu ostatniej godziny</li>
+          </ul>
+          <p class="muted">Ikony zdarzeń: <span id="key-types"></span>. Nowe zdarzenia pulsują do czasu potwierdzenia.</p>
+        </div>
+      </div>
+    </div>
+    <div class="map-body">
+      <canvas id="map" tabindex="0" aria-label="Mapa sieci kolejowej Polski z pociągami według rozkładu i symulowanymi zdarzeniami. Przeciągnij, aby przesunąć; przewiń lub użyj plusa i minusa, aby przybliżyć; wybierz pociąg lub znacznik zdarzenia."></canvas>
+      <div class="zoom">
+        <button type="button" id="zoom-in" aria-label="Przybliż">+</button>
+        <button type="button" id="zoom-out" aria-label="Oddal">−</button>
+        <button type="button" id="zoom-fit" class="fit" aria-label="Pokaż całą Polskę">Całość</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel events" aria-labelledby="events-title">
+    <div class="panel-head">
+      <h2 id="events-title">Zdarzenia</h2>
+      <span class="sev-counts" id="sev-counts"></span>
+      <span class="spacer"></span>
+      <span class="sim-tag" title="Każde zdarzenie tutaj to wymyślony scenariusz">Symulacja</span>
+    </div>
+    <div class="events-body">
+      <ul class="event-list" id="event-list" aria-label="Dzisiejsze zdarzenia"></ul>
+      <div class="detail" id="detail">
+        <p class="detail-empty" id="detail-empty">Wybierz zdarzenie z listy lub na mapie.</p>
+        <div class="detail-body" id="detail-body" hidden>
+          <div class="pills">
+            <span class="pill sev" id="d-sev"><svg class="glyph" viewBox="0 0 16 16" aria-hidden="true"><use id="d-sev-glyph" href=""></use></svg><span id="d-sev-label"></span></span>
+            <span class="pill status" id="d-status" data-status="0"><i class="dot"></i><span id="d-status-label"></span></span>
+          </div>
+          <h3 id="detail-title"></h3>
+          <div class="detail-where" id="d-where"></div>
+          <div class="detail-when" id="d-when"></div>
+          <div class="actions">
+            <button type="button" class="btn primary" id="act-ack">Potwierdź</button>
+            <button type="button" class="btn" id="act-dispatch">Wyślij ekipę</button>
+            <button type="button" class="btn" id="act-clear">Zamknij zgłoszenie</button>
+          </div>
+          <div class="section-head"><span class="eyebrow">Nadjeżdżające pociągi</span><span class="count" id="d-due-count"></span></div>
+          <ul class="due" id="d-due"></ul>
+          <details class="more">
+            <summary>Szczegóły czujnika</summary>
+            <p class="lede" id="d-lede"></p>
+            <dl class="facts">
+              <div class="wide"><dt>Linia</dt><dd id="d-line"></dd></div>
+              <div><dt>Pozycja</dt><dd id="d-km"></dd></div>
+              <div><dt>Współrzędne</dt><dd class="mono" id="d-coord"></dd></div>
+              <div class="wide"><dt>Światłowód</dt><dd id="d-fibre"></dd></div>
+              <div><dt>Sygnał</dt><dd id="d-signal"></dd></div>
+              <div><dt>Klasa modelu</dt><dd id="d-class"></dd></div>
+              <div class="wide"><dt>Identyfikator</dt><dd class="mono" id="d-id"></dd></div>
+            </dl>
+            <figure class="waterfall">
+              <canvas id="d-waterfall" aria-label="Poglądowy sygnał światłowodu wokół zdarzenia"></canvas>
+              <div class="wf-axis"><span>−600 m</span><span>zdarzenie</span><span>+600 m</span></div>
+              <figcaption>W poziomie odległość wzdłuż światłowodu, w pionie ostatnie 60 s. To ilustracja tego rodzaju zdarzenia, a nie dane pomiarowe.</figcaption>
+            </figure>
+          </details>
+          <details class="more">
+            <summary>Dziennik działań</summary>
+            <ol class="log" id="d-log"></ol>
+          </details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel line-panel" aria-labelledby="line-title">
+    <div class="panel-head" id="line-head" hidden>
+      <h2 id="line-title"></h2>
+      <span class="line-sub" id="line-sub"></span>
+      <span class="spacer"></span>
+      <span class="line-status" id="line-status"></span>
+      <div class="seg" id="strip-modes" role="group" aria-label="Pokazywana linia" hidden>
+        <button type="button" data-mode="event" aria-pressed="true">Linia zdarzenia</button>
+        <button type="button" data-mode="train" aria-pressed="false">Linia pociągu</button>
+      </div>
+      <button type="button" class="tool-btn" id="line-locate" title="Pokaż na mapie">Na mapie</button>
+    </div>
+    <p class="line-empty" id="line-empty">Wybierz zdarzenie lub pociąg, aby zobaczyć stacje na jego linii.</p>
+    <div class="strip-scroll" id="strip-scroll"><svg id="strip" role="img" aria-label="Stacje wzdłuż wybranej linii"></svg></div>
+  </section>
+</div>
+
+<div class="tooltip" id="tooltip" hidden></div>
+<div class="load-error" id="load-error" hidden>
+  <p>Nie udało się wczytać danych rozkładu. Zbuduj je poleceniem<br><code>uv run python dashboard/build_rail_data.py</code><br>i odśwież stronę.</p>
+</div>
+
+<script src="rail_data.js"></script>
+<script>
+(() => {
+  'use strict';
+  document.documentElement.lang = 'pl';
+  const D = window.RAIL_DATA;
+  const $ = (id) => document.getElementById(id);
+  if (!D) { $('load-error').hidden = false; $('dash').hidden = true; return; }
+
+  const TZ = 'Europe/Warsaw';
+  const DAY = 86400;
+  const M_PER_DEG = 111320;
+  const EARTH = 40075016.686;
+  const CLASS_LABELS = ['Dalekobieżne', 'Regionalne', 'Podmiejskie'];
+  const POLAND = { lonMin: 14.07, lonMax: 24.15, latMin: 49.0, latMax: 54.84 };
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  // Polish plural: one (1), few (2-4, 22-24, ...), many (everything else).
+  function plural(n, one, few, many) {
+    if (n === 1) return one;
+    const d = n % 10, h = n % 100;
+    return d >= 2 && d <= 4 && (h < 12 || h > 14) ? few : many;
+  }
+  const dec = (x, digits) => x.toFixed(digits).replace('.', ',');
+
+  // Simulated scenarios. `das` is the activity class the Nerw model would put on the signal.
+  const EVENT_TYPES = {
+    vehicle: {
+      label: 'Pojazd unieruchomiony na przejeździe', short: 'Pojazd na przejeździe', das: 'vehicle_stop',
+      lede: 'Pojazd drogowy wjechał na przejazd kolejowo-drogowy i zatrzymał się na nim z pracującym silnikiem.',
+      weight: 0.22, dur: [25, 110], snr: [14, 30], conf: [0.8, 0.97], severity: () => 'critical',
+      glyph: 'M2.5 11.2V8.2L4.3 4.6H11.7L13.5 8.2V11.2ZM2.5 8.2H13.5M4.6 13.4V11.2M11.4 13.4V11.2',
+    },
+    blast: {
+      label: 'Detonacja', short: 'Detonacja', das: 'burst',
+      lede: 'Impulsowy wybuch przy torze, na tyle silny, że zarejestrowały go kanały oddalone o setki metrów w obie strony.',
+      weight: 0.1, dur: [90, 240], snr: [28, 45], conf: [0.85, 0.99], severity: () => 'critical',
+      glyph: 'M8 1.8L9.3 5.5L13.2 4.4L10.8 7.7L14 10.1L10 10.4L10.1 14.3L8 11.1L5.9 14.3L6 10.4L2 10.1L5.2 7.7L2.8 4.4L6.7 5.5Z',
+    },
+    trespass: {
+      label: 'Nielegalne przejście przez tory', short: 'Przejście przez tory', das: 'footsteps',
+      lede: 'Kroki przecinające tor z dala od przejazdu i kładki dla pieszych.',
+      weight: 0.36, dur: [15, 50], snr: [4, 14], conf: [0.72, 0.94], severity: (r) => (r < 0.55 ? 'serious' : 'warning'),
+      glyph: 'M9.6 3.1a1.3 1.3 0 1 1-2.6 0a1.3 1.3 0 1 1 2.6 0M8 6L7 9.6L5 13.5M7 9.6L9.4 11.2L10.2 13.8M7.7 6.9L5.2 8.3M7.7 6.9L10.7 8.4',
+    },
+    digging: {
+      label: 'Kopanie w pobliżu kabla', short: 'Kopanie', das: 'digging',
+      lede: 'Powtarzające się uderzenia łopaty lub koparki w grunt obok trasy światłowodu.',
+      weight: 0.32, dur: [40, 160], snr: [6, 18], conf: [0.7, 0.93], severity: (r) => (r < 0.7 ? 'warning' : 'serious'),
+      glyph: 'M10 2.4L13.6 6M11.8 4.2L7 9M4.3 8.1L7.9 11.7L6.2 13.4C5.4 14.2 3.6 13.9 2.9 13.1C2.1 12.4 1.8 10.6 2.6 9.8Z',
+    },
+  };
+  const TYPE_KEYS = Object.keys(EVENT_TYPES);
+  const SEVERITY = {
+    critical: { label: 'Krytyczne', rank: 3, forms: ['krytyczne', 'krytyczne', 'krytycznych'] },
+    serious: { label: 'Poważne', rank: 2, forms: ['poważne', 'poważne', 'poważnych'] },
+    warning: { label: 'Ostrzeżenie', rank: 1, forms: ['ostrzeżenie', 'ostrzeżenia', 'ostrzeżeń'] },
+  };
+  const SEV_KEYS = ['critical', 'serious', 'warning'];
+  const STATUS_LABELS = ['Nowe', 'Potwierdzone', 'Wysłano ekipę', 'Zamknięte'];
+  const AUTO_STATUS = { critical: [120, 420], serious: [300, 900], warning: [600, Infinity] }; // seconds until acknowledged, dispatched
+  const EVENTS_PER_DAY = 110;
+  const DUE_WINDOW = 90 * 60;
+  const DUE_ROWS = 4;
+  const GLYPHS = Object.fromEntries(TYPE_KEYS.map((k) => [k, new Path2D(EVENT_TYPES[k].glyph)]));
+  $('glyph-defs').innerHTML = TYPE_KEYS.map((k) => `<symbol id="g-${k}" viewBox="0 0 16 16"><path d="${EVENT_TYPES[k].glyph}"/></symbol>`).join('');
+  const glyphSvg = (type) => `<svg class="glyph" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-${type}"/></svg>`;
+  const trainsWord = (n) => plural(n, 'pociąg', 'pociągi', 'pociągów');
+
+  // ---------------------------------------------------------------- decode
+  const toWX = (lon) => (lon + 180) / 360;
+  const toWY = (lat) => { const s = Math.sin(lat * Math.PI / 180); return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI); };
+  const latOf = (wy) => Math.atan(Math.sinh(Math.PI * (1 - 2 * wy))) * 180 / Math.PI;
+  const SCALE = D.coordScale;
+  const UNIT = D.timeUnit;
+
+  function decodeLine(flat, withMetres) {
+    const n = flat.length / 2;
+    const x = new Float64Array(n), y = new Float64Array(n);
+    const m = withMetres ? new Float64Array(n) : null;
+    let qa = 0, qo = 0, pLat = 0, pLon = 0;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < n; i++) {
+      qa += flat[2 * i]; qo += flat[2 * i + 1];
+      const lat = qa / SCALE, lon = qo / SCALE;
+      x[i] = toWX(lon); y[i] = toWY(lat);
+      if (withMetres && i > 0) {
+        // Same formula as cumulative_metres() in build_rail_data.py.
+        const mid = (lat + pLat) / 2 * Math.PI / 180;
+        m[i] = m[i - 1] + Math.hypot((lat - pLat) * M_PER_DEG, (lon - pLon) * M_PER_DEG * Math.cos(mid));
+      }
+      pLat = lat; pLon = lon;
+      if (x[i] < x0) x0 = x[i]; if (x[i] > x1) x1 = x[i];
+      if (y[i] < y0) y0 = y[i]; if (y[i] > y1) y1 = y[i];
+    }
+    return { n, x, y, m, box: [x0, y0, x1, y1] };
+  }
+
+  const shapes = D.shapes.map((s) => decodeLine(s, true));
+  const countries = D.countries.map((c) => ({ home: c.iso === 'POL', name: c.name, label: c.label, rings: c.rings.map((r) => decodeLine(r, false)) }));
+  const patterns = D.patterns.map(([shape, enc]) => {
+    const k = enc.length / 4;
+    const st = new Int32Array(k), dist = new Float64Array(k), arr = new Float64Array(k), dep = new Float64Array(k);
+    let d = 0, prevDep = 0;
+    for (let i = 0; i < k; i++) {
+      st[i] = enc[4 * i];
+      d += enc[4 * i + 1];
+      dist[i] = d;
+      arr[i] = prevDep + enc[4 * i + 2] * UNIT;
+      dep[i] = arr[i] + enc[4 * i + 3] * UNIT;
+      prevDep = dep[i];
+    }
+    return { shape, st, dist, arr, dep, dur: arr[k - 1] };
+  });
+
+  const T = D.trips;
+  const nTrips = T.pattern.length;
+  const tripStart = Float64Array.from(T.start, (v) => v * UNIT);
+  const tripClass = Int8Array.from(T.route, (r) => D.routes[r].cls);
+  const tripsByShape = shapes.map(() => []);
+  for (let k = 0; k < nTrips; k++) tripsByShape[patterns[T.pattern[k]].shape].push(k);
+
+  const stationsByCalls = D.stations
+    .map((s, i) => ({ i, name: s.name, calls: s.calls, x: toWX(s.lon / SCALE), y: toWY(s.lat / SCALE) }))
+    .sort((a, b) => b.calls - a.calls);
+  const stationXY = new Map(stationsByCalls.map((s) => [s.i, s]));
+  const cityName = (name) => name.replace(/ (Główn[aey]|Centralna|Centrum|Miasto|Osobowa)$/, '');
+  const plain = (s) => s.normalize('NFD').replace(/\p{M}/gu, '').replace(/ł/g, 'l').replace(/Ł/g, 'L').toLowerCase();
+  const stationName = (i) => D.stations[i].name;
+
+  const lineCache = new Map();
+  function lineOf(shape) {
+    if (lineCache.has(shape)) return lineCache.get(shape);
+    const counts = new Map();
+    let rep = null;
+    for (const k of tripsByShape[shape]) {
+      counts.set(T.route[k], (counts.get(T.route[k]) || 0) + 1);
+      const p = patterns[T.pattern[k]];
+      if (!rep || p.st.length > rep.st.length) rep = p;
+    }
+    if (!rep) {
+      const info = { title: 'Linia bez pociągów w rozkładzie', origin: 'NRW', rep: null };
+      lineCache.set(shape, info);
+      return info;
+    }
+    let best = -1, bc = -1;
+    for (const [r, c] of counts) if (c > bc) { bc = c; best = r; }
+    const route = D.routes[best];
+    const origin = stationName(rep.st[0]), dest = stationName(rep.st[rep.st.length - 1]);
+    const title = route.long.includes('—') ? `${route.short} ${route.long}` : `${origin} – ${dest}`;
+    const info = { title, origin, rep };
+    lineCache.set(shape, info);
+    return info;
+  }
+
+  // ---------------------------------------------------------------- calendar
+  const [by, bm, bd] = D.feed.baseDate.split('-').map(Number);
+  const BASE = Date.UTC(by, bm - 1, bd);
+  const ymd = (s) => Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8));
+  const FEED_START = Math.round((ymd(D.feed.start) - BASE) / 864e5);
+  const FEED_END = Math.round((ymd(D.feed.end) - BASE) / 864e5);
+  const dowOf = (o) => new Date(BASE + o * 864e5).getUTCDay();
+
+  function resolveDay(y, m, d) {
+    const o = Math.round((Date.UTC(y, m - 1, d) - BASE) / 864e5);
+    if (o >= FEED_START && o <= FEED_END) return { o, substituted: false };
+    const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+    const sub = o > FEED_END
+      ? FEED_END - ((dowOf(FEED_END) - dow + 7) % 7)
+      : FEED_START + ((dow - dowOf(FEED_START) + 7) % 7);
+    return { o: sub, substituted: true };
+  }
+  const runsOn = (k, o) => o >= 0 && o < D.feed.days && D.services[T.service[k]].charCodeAt(o) === 49;
+
+  // ---------------------------------------------------------------- simulated events
+  function mulberry32(a) {
+    return () => {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const lerp = (range, u) => range[0] + (range[1] - range[0]) * u;
+  const typeCum = [];
+  { let acc = 0; for (const k of TYPE_KEYS) { acc += EVENT_TYPES[k].weight; typeCum.push(acc); } }
+  const pickType = (u) => TYPE_KEYS[typeCum.findIndex((c) => u * typeCum[typeCum.length - 1] <= c)];
+  const shapeCum = new Float64Array(shapes.length);
+  { let acc = 0; shapes.forEach((sh, i) => { acc += sh.m[sh.n - 1] * Math.sqrt(tripsByShape[i].length); shapeCum[i] = acc; }); }
+  function pickShape(u) {
+    const target = u * shapeCum[shapeCum.length - 1];
+    let lo = 0, hi = shapeCum.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (shapeCum[mid] < target) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+
+  // The same service day always yields the same scenarios.
+  function eventsForDay(o, shift) {
+    const rng = mulberry32((o + 11) * 0x9e3779b1);
+    const date = new Date(BASE + o * 864e5);
+    const tag = `${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}`;
+    const out = [];
+    for (let i = 0; i < EVENTS_PER_DAY; i++) {
+      const type = pickType(rng()), cfg = EVENT_TYPES[type];
+      const start = Math.floor(rng() * DAY) - shift;
+      const dur = lerp(cfg.dur, rng()) * 60;
+      const shape = pickShape(rng());
+      const sh = shapes[shape];
+      const d = sh.m[sh.n - 1] * (0.06 + rng() * 0.88);
+      const pt = along(sh, d);
+      out.push({
+        id: `SIM-${tag}-${String(i + 1).padStart(3, '0')}`, type, severity: cfg.severity(rng()),
+        start, end: start + dur, shape, d, x: pt.x, y: pt.y,
+        conf: lerp(cfg.conf, rng()), snr: lerp(cfg.snr, rng()), seed: Math.floor(rng() * 2 ** 31),
+      });
+    }
+    return out;
+  }
+
+  const overrides = new Map(); // event id -> [, ackTime, dispatchTime, clearTime] set by the operator
+  function levelTime(ev, level) {
+    const a = AUTO_STATUS[ev.severity];
+    const auto = level === 1 ? ev.start + a[0] : level === 2 ? ev.start + a[1] : ev.end;
+    const o = overrides.get(ev.id);
+    const manual = o && o[level] != null ? o[level] : Infinity;
+    return Math.min(auto, manual);
+  }
+  function statusAt(ev, t) {
+    if (t < ev.start) return -1;
+    let s = 0;
+    for (let l = 1; l <= 3; l++) if (levelTime(ev, l) <= t) s = l;
+    return s;
+  }
+  function eventMeta(ev) {
+    if (ev.meta) return ev.meta;
+    const lat = latOf(ev.y), lon = ev.x * 360 - 180;
+    const mpw = EARTH * Math.cos(lat * Math.PI / 180);
+    let best = null, bd2 = Infinity;
+    for (const s of stationsByCalls) {
+      const dx = s.x - ev.x, dy = s.y - ev.y, dd = dx * dx + dy * dy;
+      if (dd < bd2) { bd2 = dd; best = s; }
+    }
+    const line = lineOf(ev.shape);
+    const span = 40000, fibreM = ev.d % span;
+    const code = plain(line.origin).replace(/[^a-z]/g, '').slice(0, 3).toUpperCase();
+    ev.meta = {
+      lat, lon, station: best.name, stationM: Math.sqrt(bd2) * mpw, line: line.title,
+      fibre: `Interrogator ${code}-${Math.floor(ev.d / span) + 1}, ${dec(fibreM / 1000, 2)} km wzdłuż światłowodu, kanał ${nf.format(Math.round(fibreM / 10))}`,
+    };
+    return ev.meta;
+  }
+  const metres = (m) => (m < 1000 ? `${Math.max(10, Math.round(m / 10) * 10)} m` : `${dec(m / 1000, 1)} km`);
+
+  // Every shape passing within 120 m of the event, with the distance along it.
+  function trackHits(ev) {
+    if (ev.hits) return ev.hits;
+    const mpw = EARTH * Math.cos(latOf(ev.y) * Math.PI / 180);
+    const tol = 120 / mpw, tol2 = tol * tol;
+    const hits = [];
+    for (let si = 0; si < shapes.length; si++) {
+      const sh = shapes[si], b = sh.box;
+      if (ev.x < b[0] - tol || ev.x > b[2] + tol || ev.y < b[1] - tol || ev.y > b[3] + tol) continue;
+      let best = Infinity, bestD = 0;
+      for (let i = 0; i < sh.n - 1; i++) {
+        const ax = sh.x[i], ay = sh.y[i], bx = sh.x[i + 1], bY = sh.y[i + 1];
+        if (ev.x < Math.min(ax, bx) - tol || ev.x > Math.max(ax, bx) + tol || ev.y < Math.min(ay, bY) - tol || ev.y > Math.max(ay, bY) + tol) continue;
+        const dx = bx - ax, dy = bY - ay, l2 = dx * dx + dy * dy;
+        const f = l2 > 0 ? Math.max(0, Math.min(1, ((ev.x - ax) * dx + (ev.y - ay) * dy) / l2)) : 0;
+        const px = ax + f * dx - ev.x, py = ay + f * dy - ev.y, d2 = px * px + py * py;
+        if (d2 < best) { best = d2; bestD = sh.m[i] + (sh.m[i + 1] - sh.m[i]) * f; }
+      }
+      if (best <= tol2) hits.push({ shape: si, d: bestD });
+    }
+    ev.hits = hits;
+    return hits;
+  }
+
+  // Seconds after a trip's start when it reaches distance dd, inverting the easing locate() uses.
+  function passTime(p, dd) {
+    const { dist, arr, dep } = p;
+    const n = dist.length;
+    if (dd < dist[0] - 50 || dd > dist[n - 1] + 50) return null;
+    let i = 0;
+    while (i < n - 2 && dist[i + 1] < dd) i++;
+    if (dd <= dist[i]) return arr[i];
+    if (dd >= dist[i + 1]) return arr[i + 1];
+    const s = (dd - dist[i]) / (dist[i + 1] - dist[i]);
+    let lo = 0, hi = 1;
+    for (let it = 0; it < 22; it++) {
+      const mid = (lo + hi) / 2;
+      if (0.35 * mid + 0.65 * mid * mid * (3 - 2 * mid) < s) lo = mid; else hi = mid;
+    }
+    return dep[i] + (arr[i + 1] - dep[i]) * (lo + hi) / 2;
+  }
+
+  function trainsDue(ev, t) {
+    const out = [];
+    for (const h of trackHits(ev)) {
+      for (const k of tripsByShape[h.shape]) {
+        const entries = day.byK.get(k);
+        if (!entries) continue;
+        const p = patterns[T.pattern[k]];
+        for (const e of entries) {
+          if (e.t1 < t - 120 || e.t0 > t + DUE_WINDOW) continue;
+          const rel = passTime(p, h.d);
+          if (rel == null) continue;
+          const eta = e.t0 + rel - t;
+          if (eta >= -60 && eta <= DUE_WINDOW) out.push({ e, eta });
+        }
+      }
+    }
+    return out.sort((a, b) => a.eta - b.eta);
+  }
+
+  // ---------------------------------------------------------------- day
+  let day = { o: -1, list: [], byK: new Map(), scheduled: 0, substituted: false, events: [] };
+  function buildDay(o, substituted) {
+    const list = [], byK = new Map();
+    let scheduled = 0;
+    const add = (e) => { list.push(e); const a = byK.get(e.k); if (a) a.push(e); else byK.set(e.k, [e]); };
+    for (let k = 0; k < nTrips; k++) {
+      const t0 = tripStart[k], t1 = t0 + patterns[T.pattern[k]].dur;
+      if (runsOn(k, o)) { add({ k, t0, t1 }); scheduled++; }
+      if (t1 > DAY && runsOn(k, o - 1)) add({ k, t0: t0 - DAY, t1: t1 - DAY });
+    }
+    const events = eventsForDay(o, 0).concat(eventsForDay(o - 1, DAY).filter((ev) => ev.end > 0));
+    const prevTrain = selectedTrain, prevEvent = selectedEvent;
+    day = { o, list, byK, scheduled, substituted, events };
+    if (prevTrain) {
+      const c = byK.get(prevTrain.k) || [];
+      selectTrain(c.find((e) => e.t0 === prevTrain.t0) || c[0] || null, true);
+    }
+    if (prevEvent) {
+      const again = events.find((ev) => ev.id === prevEvent.id) || null;
+      const wasFocused = focus && focus.id === prevEvent.id;
+      selectEvent(again);
+      if (wasFocused && again) { focus = again; staticDirty = true; }
+    }
+  }
+
+  // ---------------------------------------------------------------- clock
+  const partsFmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  });
+  const dateFmt = new Intl.DateTimeFormat('pl-PL', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const shortDateFmt = new Intl.DateTimeFormat('pl-PL', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'long' });
+  let tz = { bucket: -1, offset: 0 };
+  function local(ms) {
+    const bucket = Math.floor(ms / 6e5);
+    if (bucket !== tz.bucket) {
+      const p = {};
+      for (const { type, value } of partsFmt.formatToParts(ms)) p[type] = value;
+      tz = { bucket, offset: Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - Math.floor(ms / 1000) * 1000 };
+    }
+    const l = new Date(ms + tz.offset);
+    return {
+      y: l.getUTCFullYear(), m: l.getUTCMonth() + 1, d: l.getUTCDate(),
+      sec: l.getUTCHours() * 3600 + l.getUTCMinutes() * 60 + l.getUTCSeconds() + l.getUTCMilliseconds() / 1000,
+    };
+  }
+  function pad(v) { return String(v).padStart(2, '0'); }
+  const hm = (sec) => { const s = ((Math.floor(sec) % DAY) + DAY) % DAY; return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}`; };
+  const hms = (sec) => `${hm(sec)}:${pad(Math.floor(sec) % 60)}`;
+  const nf = new Intl.NumberFormat('pl-PL');
+  function ago(sec) {
+    const m = Math.floor(sec / 60);
+    if (m < 1) return 'przed chwilą';
+    if (m < 60) return `${m} min temu`;
+    return `${Math.floor(m / 60)} godz. ${m % 60} min temu`;
+  }
+  function etaText(sec) {
+    if (sec < 45) return 'teraz';
+    const m = Math.round(sec / 60);
+    return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${pad(m % 60)} min`;
+  }
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  // ---------------------------------------------------------------- state
+  const time = { mode: 'live', playing: true, speed: 1, sim: Date.now(), last: performance.now() };
+  const filters = { classes: [true, true, true], operator: -1, query: '', running: true, platform: true, events: Object.fromEntries(TYPE_KEYS.map((k) => [k, true])) };
+  let queryFlags = null;
+  let patternText = null;
+  let selectedTrain = null;   // a day-list entry {k, t0, t1}
+  let selectedEvent = null;
+  let focus = null;           // the event the map is zoomed to; only its track and due trains are drawn
+  let stripMode = 'event';    // which line the axis under the map shows
+  let focusSig = '';
+  let flight = null;
+  let staticDirty = true;
+  let userMoved = false;
+  let theme = {};
+  let clock = { y: 0, m: 0, d: 0, sec: 0 };
+  let visible = [];
+  let due = { id: null, at: 0, list: [], set: new Set() };
+
+  const canvas = $('map');
+  const ctx = canvas.getContext('2d');
+  const staticCanvas = document.createElement('canvas');
+  const sctx = staticCanvas.getContext('2d');
+  let W = 0, H = 0, DPR = 1;
+  const view = { cx: 0.5, cy: 0.5, s: 1 };
+  let fitS = 1;
+  let cache = null;
+  let lastInteraction = 0;
+
+  function readTheme() {
+    const cs = getComputedStyle(document.documentElement);
+    const v = (n) => cs.getPropertyValue(n).trim();
+    theme = {
+      sea: v('--sea'), abroad: v('--land-abroad'), land: v('--land'),
+      borderHome: v('--border-home'), borderAbroad: v('--border-abroad'), rail: v('--rail'),
+      ink: v('--ink'), ink2: v('--ink-2'), ink3: v('--ink-3'), halo: v('--halo'),
+      surface: v('--surface'), surface2: v('--surface-2'), route: v('--route'), signal: v('--signal'),
+      flow: v('--flow'), train: v('--train'), display: v('--f-display'),
+      sev: { critical: v('--crit'), serious: v('--serious'), warning: v('--warn') },
+      sevInk: { critical: v('--crit-ink'), serious: v('--serious-ink'), warning: v('--warn-ink') },
+    };
+  }
+
+  // ---------------------------------------------------------------- view
+  function fit(animate) {
+    const inset = { top: 18, bottom: 18, left: 16, right: 52 };
+    const x0 = toWX(POLAND.lonMin), x1 = toWX(POLAND.lonMax);
+    const y0 = toWY(POLAND.latMax), y1 = toWY(POLAND.latMin);
+    const aw = Math.max(80, W - inset.left - inset.right), ah = Math.max(80, H - inset.top - inset.bottom);
+    fitS = Math.min(aw / (x1 - x0), ah / (y1 - y0));
+    const cx = (x0 + x1) / 2 - (inset.left + aw / 2 - W / 2) / fitS;
+    const cy = (y0 + y1) / 2 - (inset.top + ah / 2 - H / 2) / fitS;
+    if (animate) flyTo(cx, cy, fitS);
+    else { flight = null; view.s = fitS; view.cx = cx; view.cy = cy; invalidate(true); }
+    userMoved = false;
+  }
+  function flyTo(cx, cy, s) {
+    if (reduceMotion.matches) { flight = null; view.cx = cx; view.cy = cy; view.s = s; invalidate(true); return; }
+    flight = { from: { cx: view.cx, cy: view.cy, s: view.s }, to: { cx, cy, s }, start: performance.now(), dur: 650 };
+  }
+  function stepFlight(now) {
+    const f = Math.min(1, (now - flight.start) / flight.dur);
+    const e = f < 0.5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2;
+    const { from, to } = flight;
+    view.s = Math.exp(Math.log(from.s) + (Math.log(to.s) - Math.log(from.s)) * e);
+    view.cx = from.cx + (to.cx - from.cx) * e;
+    view.cy = from.cy + (to.cy - from.cy) * e;
+    if (f >= 1) { flight = null; invalidate(true); } else invalidate();
+  }
+  const zoomLevel = () => view.s / fitS;
+  const sx = (wx) => (wx - view.cx) * view.s + W / 2;
+  const sy = (wy) => (wy - view.cy) * view.s + H / 2;
+  function zoomAt(px, py, factor) {
+    flight = null;
+    const wx = (px - W / 2) / view.s + view.cx, wy = (py - H / 2) / view.s + view.cy;
+    view.s = Math.min(Math.max(view.s * factor, fitS * 0.6), fitS * 400);
+    view.cx = wx - (px - W / 2) / view.s;
+    view.cy = wy - (py - H / 2) / view.s;
+    userMoved = true;
+    invalidate();
+  }
+  function centreOn(wx, wy, minZoom) {
+    if (minZoom && view.s < fitS * minZoom) view.s = fitS * minZoom;
+    view.cx = wx; view.cy = wy;
+    userMoved = true;
+    invalidate(true);
+  }
+  function invalidate(now) { staticDirty = true; lastInteraction = now ? 0 : performance.now(); }
+
+  function resizeMap() {
+    const r = canvas.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = r.width; H = r.height;
+    for (const c of [canvas, staticCanvas]) { c.width = Math.round(W * DPR); c.height = Math.round(H * DPR); }
+    if (!userMoved) fit(); else invalidate(true);
+  }
+
+  // ---------------------------------------------------------------- static layer
+  function traceLine(g, line, closed) {
+    const { n, x, y } = line;
+    let px = sx(x[0]), py = sy(y[0]);
+    g.moveTo(px, py);
+    for (let i = 1; i < n; i++) {
+      const qx = sx(x[i]), qy = sy(y[i]);
+      if (i < n - 1 && Math.abs(qx - px) + Math.abs(qy - py) < 0.7) continue;
+      g.lineTo(qx, qy);
+      px = qx; py = qy;
+    }
+    if (closed) g.closePath();
+  }
+  const onScreen = (box, margin) => sx(box[2]) >= -margin && sx(box[0]) <= W + margin && sy(box[3]) >= -margin && sy(box[1]) <= H + margin;
+
+  function renderStatic() {
+    const g = sctx;
+    const z = zoomLevel();
+    g.setTransform(DPR, 0, 0, DPR, 0, 0);
+    g.fillStyle = theme.sea;
+    g.fillRect(0, 0, W, H);
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+
+    for (const home of [false, true]) {
+      g.beginPath();
+      for (const c of countries) {
+        if (c.home !== home) continue;
+        for (const ring of c.rings) if (onScreen(ring.box, 20)) traceLine(g, ring, true);
+      }
+      g.fillStyle = home ? theme.land : theme.abroad;
+      g.fill('evenodd');
+      g.strokeStyle = home ? theme.borderHome : theme.borderAbroad;
+      g.lineWidth = home ? 1.2 : 0.8;
+      g.stroke();
+    }
+
+    if (z < 4) {
+      g.font = `600 11px ${theme.display}`;
+      if ('letterSpacing' in g) g.letterSpacing = '2px';
+      g.fillStyle = theme.ink3;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      for (const c of countries) {
+        if (c.home || !c.label) continue;
+        const px = sx(toWX(c.label[1])), py = sy(toWY(c.label[0]));
+        if (px > 50 && px < W - 50 && py > 20 && py < H - 20) g.fillText(c.name.toLocaleUpperCase('pl'), px, py);
+      }
+      const bx = sx(toWX(17.6)), byy = sy(toWY(55.25));
+      if (byy > 12) g.fillText('MORZE BAŁTYCKIE', bx, byy);
+      if ('letterSpacing' in g) g.letterSpacing = '0px';
+    }
+
+    g.beginPath();
+    for (const sh of shapes) if (onScreen(sh.box, 10)) traceLine(g, sh, false);
+    g.strokeStyle = theme.rail;
+    g.lineWidth = Math.min(2.4, Math.max(0.9, 0.9 * Math.pow(z, 0.35)));
+    if (focus) g.globalAlpha = 0.4;
+    g.stroke();
+    g.globalAlpha = 1;
+
+    const placed = [];
+    const collides = (b) => placed.some((p) => b[0] < p[2] && b[2] > p[0] && b[1] < p[3] && b[3] > p[1]);
+    const place = (s, text, strong) => {
+      const px = sx(s.x), py = sy(s.y);
+      if (px < -40 || px > W + 40 || py < -20 || py > H + 20) return false;
+      g.font = strong ? `700 13px ${theme.display}` : `600 11.5px ${theme.display}`;
+      const w = g.measureText(text).width;
+      const box = [px + 5, py - 9, px + 9 + w, py + 8];
+      if (collides(box)) return false;
+      placed.push(box, [px - 4, py - 4, px + 4, py + 4]);
+      g.beginPath();
+      g.arc(px, py, strong ? 3 : 2.4, 0, Math.PI * 2);
+      g.fillStyle = theme.halo;
+      g.fill();
+      g.lineWidth = 1.6;
+      g.strokeStyle = strong ? theme.ink : theme.ink2;
+      g.stroke();
+      g.textAlign = 'left';
+      g.textBaseline = 'middle';
+      g.lineWidth = 3.5;
+      g.strokeStyle = theme.halo;
+      g.strokeText(text, px + 8, py);
+      g.fillStyle = strong ? theme.ink : theme.ink2;
+      g.fillText(text, px + 8, py);
+      return true;
+    };
+
+    const highlight = new Set(focus ? focusShapes() : []);
+    if (selectedTrain) highlight.add(patterns[T.pattern[selectedTrain.k]].shape);
+    if (highlight.size) {
+      g.beginPath();
+      for (const s of highlight) traceLine(g, shapes[s], false);
+      g.strokeStyle = theme.halo;
+      g.lineWidth = 7;
+      g.stroke();
+      g.strokeStyle = theme.route;
+      g.lineWidth = 3.5;
+      g.stroke();
+    }
+    const stopPattern = focus ? lineOf(focus.shape).rep : selectedTrain ? patterns[T.pattern[selectedTrain.k]] : null;
+    if (stopPattern) {
+      const p = stopPattern, sh = shapes[p.shape];
+      for (let i = 0; i < p.st.length; i++) {
+        const pt = along(sh, p.dist[i]);
+        g.beginPath();
+        g.arc(sx(pt.x), sy(pt.y), 2.6, 0, Math.PI * 2);
+        g.fillStyle = theme.halo;
+        g.fill();
+        g.lineWidth = 1.5;
+        g.strokeStyle = theme.route;
+        g.stroke();
+      }
+      if (focus) {
+        // Name the stations either side of the event first.
+        const order = Array.from(p.st.keys()).sort((a, b) => Math.abs(p.dist[a] - focus.d) - Math.abs(p.dist[b] - focus.d));
+        for (const i of order.slice(0, 14)) place(stationXY.get(p.st[i]), stationName(p.st[i]), false);
+      } else {
+        for (const i of [p.st[0], p.st[p.st.length - 1]]) place(stationXY.get(i), stationName(i), true);
+      }
+    }
+
+    const budget = focus ? 6 : Math.min(240, Math.round(11 * Math.pow(z, 1.35)));
+    const short = z < 3.2;
+    const seen = new Set();
+    let count = 0;
+    for (const s of stationsByCalls) {
+      if (count >= budget) break;
+      const text = short ? cityName(s.name) : s.name;
+      if (short && seen.has(text)) continue;
+      if (place(s, text, short && count < 8)) { count++; seen.add(text); }
+    }
+
+    cache = { cx: view.cx, cy: view.cy, s: view.s };
+    staticDirty = false;
+  }
+
+  // ---------------------------------------------------------------- trains
+  function along(sh, d) {
+    const m = sh.m, n = sh.n;
+    if (d <= 0) return { x: sh.x[0], y: sh.y[0] };
+    if (d >= m[n - 1]) return { x: sh.x[n - 1], y: sh.y[n - 1] };
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (m[mid] <= d) lo = mid; else hi = mid; }
+    const f = (d - m[lo]) / (m[hi] - m[lo] || 1);
+    return { x: sh.x[lo] + (sh.x[hi] - sh.x[lo]) * f, y: sh.y[lo] + (sh.y[hi] - sh.y[lo]) * f };
+  }
+
+  // Where a trip is r seconds after its start.
+  function locate(p, r) {
+    const { arr, dep, dist } = p;
+    const n = arr.length;
+    if (r <= dep[0]) return { moving: false, i: 0, d: dist[0] };
+    if (r >= arr[n - 1]) return { moving: false, i: n - 1, d: dist[n - 1] };
+    let lo = 0, hi = n - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (arr[mid] <= r) lo = mid; else hi = mid - 1; }
+    if (r <= dep[lo]) return { moving: false, i: lo, d: dist[lo] };
+    const span = arr[lo + 1] - dep[lo];
+    let f = span > 0 ? (r - dep[lo]) / span : 1;
+    f = 0.35 * f + 0.65 * f * f * (3 - 2 * f); // pull away and brake rather than jump to line speed
+    return { moving: true, i: lo, d: dist[lo] + (dist[lo + 1] - dist[lo]) * f };
+  }
+
+  function applyQuery(q) {
+    filters.query = q;
+    const nq = plain(q.trim());
+    if (!nq) { queryFlags = null; return; }
+    if (!patternText) patternText = patterns.map((p) => Array.from(p.st, (s) => plain(stationName(s))).join('|'));
+    queryFlags = new Uint8Array(nTrips);
+    for (let k = 0; k < nTrips; k++) {
+      if (plain(`${T.category[k]} ${T.number[k]} ${T.name[k]}`).includes(nq) || patternText[T.pattern[k]].includes(nq)) queryFlags[k] = 1;
+    }
+  }
+  const passesTrip = (k) => (filters.operator < 0 || D.routes[T.route[k]].agency === filters.operator) && (!queryFlags || queryFlags[k] === 1);
+
+  const hits = { x: new Float32Array(4096), y: new Float32Array(4096), e: new Array(4096), n: 0 };
+  const eventHits = [];
+  const counts = { cls: [0, 0, 0], shown: 0, total: 0 };
+
+  function drawTrains(t) {
+    const z = zoomLevel();
+    const pxPerM = view.s / (EARTH * Math.cos(52 * Math.PI / 180));
+    const lenPx = Math.min(90, Math.max(8 + 2 * Math.log2(Math.max(z, 1)), 200 * pxPerM));
+    const lenM = lenPx / pxPerM;
+    const width = Math.min(7, Math.max(4, 4 * Math.pow(z, 0.22)));
+    const run = new Path2D(), stop = new Path2D(), halo = new Path2D();
+    const dueRings = [];
+    counts.cls = [0, 0, 0]; counts.shown = 0; counts.total = 0;
+    hits.n = 0;
+    let sel = null;
+
+    for (const e of day.list) {
+      if (t < e.t0 || t > e.t1) continue;
+      counts.total++;
+      const k = e.k, cls = tripClass[k];
+      const forced = e === selectedTrain;
+      const p = patterns[T.pattern[k]];
+      const loc = locate(p, t - e.t0);
+      if (!forced) {
+        if (focus) {
+          if (!due.set.has(e)) continue;
+        } else {
+          if (!passesTrip(k) || (loc.moving ? !filters.running : !filters.platform)) continue;
+          counts.cls[cls]++;
+          if (!filters.classes[cls]) continue;
+        }
+        counts.shown++;
+      }
+      const sh = shapes[p.shape];
+      const head = along(sh, loc.d);
+      const hx = sx(head.x), hy = sy(head.y);
+      if (hx < -lenPx || hx > W + lenPx || hy < -lenPx || hy > H + lenPx) continue;
+      const midP = along(sh, loc.d - lenM / 2), tail = along(sh, loc.d - lenM);
+      const mx = sx(midP.x), my = sy(midP.y), tx = sx(tail.x), ty = sy(tail.y);
+      const seg = (path) => { path.moveTo(tx, ty); path.lineTo(mx, my); path.lineTo(hx, hy); };
+      seg(halo);
+      seg(loc.moving ? run : stop);
+      if (hits.n < hits.x.length) { hits.x[hits.n] = mx; hits.y[hits.n] = my; hits.e[hits.n] = e; hits.n++; }
+      if (forced) sel = { hx, hy, tx, ty, mx, my, moving: loc.moving };
+      if (due.set.has(e)) dueRings.push([mx, my]);
+    }
+
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = theme.halo;
+    ctx.lineWidth = width + 3;
+    ctx.stroke(halo);
+    ctx.strokeStyle = theme.train;
+    ctx.lineWidth = width;
+    ctx.stroke(run);
+    ctx.stroke(stop);
+    ctx.strokeStyle = theme.halo;
+    ctx.lineWidth = Math.max(1.5, width - 3);
+    ctx.stroke(stop);
+
+    if (dueRings.length) {
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = theme.ink;
+      for (const [x, y] of dueRings) { ctx.beginPath(); ctx.arc(x, y, lenPx / 2 + 6, 0, Math.PI * 2); ctx.stroke(); }
+      ctx.setLineDash([]);
+    }
+
+    if (sel) {
+      const path = new Path2D();
+      path.moveTo(sel.tx, sel.ty); path.lineTo(sel.mx, sel.my); path.lineTo(sel.hx, sel.hy);
+      ctx.strokeStyle = theme.ink;
+      ctx.lineWidth = width + 7;
+      ctx.stroke(path);
+      ctx.strokeStyle = theme.signal;
+      ctx.lineWidth = width + 4;
+      ctx.stroke(path);
+      ctx.strokeStyle = theme.train;
+      ctx.lineWidth = width;
+      ctx.stroke(path);
+      if (!sel.moving) { ctx.strokeStyle = theme.halo; ctx.lineWidth = Math.max(1.5, width - 3); ctx.stroke(path); }
+    }
+  }
+
+  // ---------------------------------------------------------------- event markers
+  function markerPath(cx, cy, size, r) {
+    const h = size / 2;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(cx - h, cy - h, size, size, r); else ctx.rect(cx - h, cy - h, size, size);
+  }
+  function drawEvents(t, nowPerf) {
+    eventHits.length = 0;
+    const ordered = visible.slice().sort((a, b) => (statusAt(b, t) === 3) - (statusAt(a, t) === 3) || SEVERITY[a.severity].rank - SEVERITY[b.severity].rank);
+    if (!focus) for (const ev of ordered) if (ev !== selectedEvent) drawMarker(ev, t, false, nowPerf);
+    if (selectedEvent && selectedEvent.start <= t && (visible.includes(selectedEvent) || focus === selectedEvent)) drawMarker(selectedEvent, t, true, nowPerf);
+  }
+  function drawMarker(ev, t, isSel, nowPerf) {
+    const px = sx(ev.x), py = sy(ev.y);
+    if (px < -30 || px > W + 30 || py < -30 || py > H + 30) return;
+    const status = statusAt(ev, t);
+    const cleared = status === 3;
+    const size = cleared ? 16 : isSel ? 26 : 22;
+    const fill = cleared ? theme.surface : theme.sev[ev.severity];
+    const ink = cleared ? theme.ink3 : theme.sevInk[ev.severity];
+    if (status === 0) {
+      const phase = reduceMotion.matches ? 0.35 : (nowPerf % 1600) / 1600;
+      ctx.beginPath();
+      ctx.arc(px, py, size / 2 + 4 + phase * 12, 0, Math.PI * 2);
+      ctx.globalAlpha = 1 - phase;
+      ctx.strokeStyle = theme.sev[ev.severity];
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    if (isSel) {
+      markerPath(px, py, size + 10, 8);
+      ctx.fillStyle = theme.signal;
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = theme.ink;
+      ctx.stroke();
+    }
+    markerPath(px, py, size, cleared ? 4 : 5);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = theme.halo;
+    ctx.stroke();
+    ctx.fillStyle = fill;
+    ctx.fill();
+    if (cleared) { ctx.lineWidth = 1.5; ctx.strokeStyle = theme.ink3; ctx.stroke(); }
+    const gs = size * 0.66 / 16;
+    ctx.save();
+    ctx.translate(px - 8 * gs, py - 8 * gs);
+    ctx.scale(gs, gs);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = cleared ? 1.7 : 1.9;
+    ctx.strokeStyle = ink;
+    ctx.stroke(GLYPHS[ev.type]);
+    ctx.restore();
+    eventHits.push({ x: px, y: py, ev, r: size / 2 + 4 });
+  }
+
+  function visibleEvents(t) {
+    return day.events.filter((ev) => {
+      if (ev.start > t || !filters.events[ev.type]) return false;
+      const s = statusAt(ev, t);
+      return s < 3 || t - levelTime(ev, 3) < 3600;
+    });
+  }
+
+  // ---------------------------------------------------------------- frame
+  let booted = false;
+  let lastSecond = -1, lastPanel = 0, lastDetail = 0;
+
+  function frame(nowPerf) {
+    const dt = nowPerf - time.last;
+    time.last = nowPerf;
+    if (time.mode === 'live') time.sim = Date.now();
+    else if (time.playing) time.sim += dt * time.speed;
+
+    clock = local(time.sim);
+    const r = resolveDay(clock.y, clock.m, clock.d);
+    if (r.o !== day.o) buildDay(r.o, r.substituted);
+    day.substituted = r.substituted;
+    const t = clock.sec;
+    visible = visibleEvents(t);
+    if (!booted && W > 0) { booted = true; pickDefaults(t); }
+    if (selectedEvent && (due.id !== selectedEvent.id || nowPerf - due.at > 1000)) {
+      const list = trainsDue(selectedEvent, t);
+      due = { id: selectedEvent.id, at: nowPerf, list, set: new Set(list.map((x) => x.e)) };
+    } else if (!selectedEvent && due.id) {
+      due = { id: null, at: 0, list: [], set: new Set() };
+    }
+    if (focus) {
+      const sig = focusShapes().join(',');
+      if (sig !== focusSig) { focusSig = sig; staticDirty = true; }
+    }
+    if (flight) stepFlight(nowPerf);
+
+    if (W > 0) {
+      if (staticDirty && (!cache || nowPerf - lastInteraction > 140)) renderStatic();
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      if (cache && (cache.s !== view.s || cache.cx !== view.cx || cache.cy !== view.cy)) {
+        ctx.fillStyle = theme.sea;
+        ctx.fillRect(0, 0, W, H);
+        const k = view.s / cache.s;
+        ctx.translate(W / 2 + (cache.cx - view.cx) * view.s, H / 2 + (cache.cy - view.cy) * view.s);
+        ctx.scale(k, k);
+        ctx.translate(-W / 2, -H / 2);
+        ctx.drawImage(staticCanvas, 0, 0, W, H);
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      } else if (cache) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(staticCanvas, 0, 0);
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      }
+      drawTrains(t);
+      drawEvents(t, nowPerf);
+    }
+
+    updateStrip(t);
+    const second = Math.floor(t);
+    if (second !== lastSecond) { lastSecond = second; updateClock(); }
+    if (nowPerf - lastPanel > 250) { lastPanel = nowPerf; updateCounts(); }
+    if (nowPerf - lastDetail > 500) { lastDetail = nowPerf; updateDetail(t); renderEventList(t); refreshStripEvents(); }
+    requestAnimationFrame(frame);
+  }
+
+  function pickDefaults(t) {
+    const active = visible
+      .filter((ev) => statusAt(ev, t) < 3)
+      .sort((a, b) => SEVERITY[b.severity].rank - SEVERITY[a.severity].rank || b.start - a.start);
+    let chosen = null, dueList = [];
+    for (const ev of active.slice(0, 15)) {
+      const list = trainsDue(ev, t).filter((x) => x.eta >= 0 && x.e.t0 <= t);
+      if (list.length) { chosen = ev; dueList = list; break; }
+    }
+    selectEvent(chosen || active[0] || null);
+    let train = dueList.length ? dueList[0].e : null;
+    if (!train) {
+      let most = -1;
+      for (const e of day.list) {
+        if (t < e.t0 || t > e.t1 || tripClass[e.k] !== 0) continue;
+        const n = patterns[T.pattern[e.k]].st.length;
+        if (n > most) { most = n; train = e; }
+      }
+    }
+    selectTrain(train, true);
+  }
+
+  // ---------------------------------------------------------------- top bar
+  const slider = $('time-slider');
+  let sliding = false;
+  function updateClock() {
+    $('clock-time').textContent = hms(clock.sec);
+    $('clock-date').textContent = dateFmt.format(time.sim);
+    const note = $('clock-note');
+    if (day.substituted) {
+      note.hidden = false;
+      note.textContent = `Rozkład obowiązuje do ${shortDateFmt.format(ymd(D.feed.end))}. Pokazywany jest rozkład z ${shortDateFmt.format(BASE + day.o * 864e5)}.`;
+    } else note.hidden = true;
+    $('mode-chip').dataset.mode = time.mode;
+    $('mode-label').textContent = time.mode === 'live' ? 'Na żywo' : time.playing ? `Odtwarzanie ${time.speed}×` : 'Pauza';
+    const minute = Math.floor(clock.sec / 60);
+    if (!sliding) slider.value = String(minute);
+    slider.style.setProperty('--pct', `${(minute / 1439) * 100}%`);
+    slider.setAttribute('aria-valuetext', hm(clock.sec));
+  }
+  function scrubTo(minute) {
+    time.sim = Date.UTC(clock.y, clock.m - 1, clock.d) - tz.offset + minute * 60000;
+    if (time.mode === 'live') { time.mode = 'replay'; time.speed = 60; time.playing = true; }
+    syncControls();
+  }
+  slider.addEventListener('pointerdown', () => { sliding = true; });
+  slider.addEventListener('input', () => { scrubTo(+slider.value); });
+  slider.addEventListener('change', () => { sliding = false; });
+  slider.addEventListener('pointerup', () => { sliding = false; });
+
+  function syncControls() {
+    $('live-btn').setAttribute('aria-pressed', String(time.mode === 'live'));
+    for (const b of document.querySelectorAll('.speeds button')) {
+      const on = time.mode === 'live' ? b.dataset.speed === '1' : +b.dataset.speed === time.speed;
+      b.setAttribute('aria-pressed', String(on));
+    }
+    const playing = time.mode === 'live' || time.playing;
+    $('play-btn').setAttribute('aria-label', playing ? 'Wstrzymaj' : 'Wznów');
+    $('play-icon').innerHTML = playing
+      ? '<rect x="2" y="1.5" width="2.8" height="9" rx="0.6"/><rect x="7.2" y="1.5" width="2.8" height="9" rx="0.6"/>'
+      : '<path d="M2.5 1.2v9.6L10.5 6z"/>';
+    lastSecond = -1;
+  }
+  $('live-btn').addEventListener('click', () => { time.mode = 'live'; time.playing = true; time.speed = 1; syncControls(); });
+  $('play-btn').addEventListener('click', () => {
+    if (time.mode === 'live') { time.mode = 'replay'; time.playing = false; time.speed = 1; } else time.playing = !time.playing;
+    syncControls();
+  });
+  for (const b of document.querySelectorAll('.speeds button')) {
+    b.addEventListener('click', () => {
+      const speed = +b.dataset.speed;
+      if (time.mode === 'live' && speed === 1) return;
+      time.mode = 'replay'; time.playing = true; time.speed = speed;
+      syncControls();
+    });
+  }
+
+  // ---------------------------------------------------------------- menus
+  const menus = [];
+  function setupMenu(btnId, menuId) {
+    const btn = $(btnId), menu = $(menuId);
+    const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+    btn.addEventListener('click', () => {
+      const open = menu.hidden;
+      for (const m of menus) m.close();
+      if (open) {
+        menu.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+        const first = menu.querySelector('input, select, button');
+        if (first) first.focus({ preventScroll: true });
+      }
+    });
+    menus.push({ btn, menu, close });
+  }
+  document.addEventListener('pointerdown', (ev) => {
+    for (const m of menus) if (!m.menu.hidden && !m.menu.contains(ev.target) && !m.btn.contains(ev.target)) m.close();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    for (const m of menus) if (!m.menu.hidden) { m.close(); m.btn.focus(); }
+  });
+
+  // ---------------------------------------------------------------- filters
+  function buildFilters() {
+    $('f-classes').innerHTML = CLASS_LABELS.map((label, c) =>
+      `<button type="button" class="chip" data-class="${c}" aria-pressed="true">${label}<span class="n" id="f-class-n-${c}">0</span></button>`).join('');
+    $('f-events').innerHTML = TYPE_KEYS.map((k) =>
+      `<button type="button" class="chip" data-type="${k}" aria-pressed="true"><span class="type-mark">${glyphSvg(k)}</span>${EVENT_TYPES[k].short}</button>`).join('');
+    const agencies = D.agencies.map((a, i) => ({ i, name: a.name })).sort((a, b) => a.name.localeCompare(b.name, 'pl'));
+    $('f-operator').innerHTML = `<option value="-1">Wszyscy przewoźnicy</option>${agencies.map((a) => `<option value="${a.i}">${esc(a.name)}</option>`).join('')}`;
+
+    $('f-classes').addEventListener('click', (ev) => {
+      const b = ev.target.closest('[data-class]');
+      if (!b) return;
+      const c = +b.dataset.class;
+      filters.classes[c] = !filters.classes[c];
+      b.setAttribute('aria-pressed', String(filters.classes[c]));
+    });
+    $('f-events').addEventListener('click', (ev) => {
+      const b = ev.target.closest('[data-type]');
+      if (!b) return;
+      const k = b.dataset.type;
+      filters.events[k] = !filters.events[k];
+      b.setAttribute('aria-pressed', String(filters.events[k]));
+      lastDetail = 0;
+    });
+    $('f-operator').addEventListener('change', (ev) => { filters.operator = +ev.target.value; });
+    for (const [id, key] of [['f-running', 'running'], ['f-platform', 'platform']]) {
+      $(id).addEventListener('click', () => { filters[key] = !filters[key]; $(id).setAttribute('aria-pressed', String(filters[key])); });
+    }
+    let debounce = 0;
+    $('f-query').addEventListener('input', (ev) => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => applyQuery(ev.target.value), 160);
+    });
+    $('f-reset').addEventListener('click', () => {
+      filters.classes = [true, true, true];
+      filters.operator = -1; filters.running = true; filters.platform = true;
+      for (const k of TYPE_KEYS) filters.events[k] = true;
+      $('f-query').value = ''; applyQuery('');
+      $('f-operator').value = '-1';
+      for (const b of document.querySelectorAll('#filters-menu .chip')) b.setAttribute('aria-pressed', 'true');
+      lastDetail = 0;
+    });
+  }
+  function activeFilterCount() {
+    return (filters.classes.includes(false) ? 1 : 0) + (filters.operator >= 0 ? 1 : 0) + (filters.query.trim() ? 1 : 0)
+      + (!filters.running || !filters.platform ? 1 : 0) + (TYPE_KEYS.some((k) => !filters.events[k]) ? 1 : 0);
+  }
+
+  function updateCounts() {
+    for (let c = 0; c < 3; c++) $(`f-class-n-${c}`).textContent = nf.format(counts.cls[c]);
+    const summary = counts.shown === counts.total
+      ? `W ruchu: ${nf.format(counts.total)} ${trainsWord(counts.total)}`
+      : `W ruchu: ${nf.format(counts.shown)} z ${nf.format(counts.total)}`;
+    const mapSummary = $('map-summary');
+    if (focus) {
+      const n = due.id === focus.id ? due.list.length : 0;
+      mapSummary.textContent = `${EVENT_TYPES[focus.type].label} · ${metres(eventMeta(focus).stationM)} od stacji ${eventMeta(focus).station} · nadjeżdżające w ciągu 90 min: ${n}`;
+    } else mapSummary.textContent = summary;
+    mapSummary.classList.toggle('focused', !!focus);
+    $('focus-exit').hidden = !focus;
+    $('f-summary').textContent = summary;
+    const n = activeFilterCount();
+    const badge = $('filters-badge');
+    badge.hidden = n === 0;
+    badge.textContent = String(n);
+  }
+
+  // ---------------------------------------------------------------- selection
+  function trainTitle(k) {
+    const cat = T.category[k], num = T.number[k];
+    return { id: num.startsWith(cat) ? num : `${cat} ${num}`, name: titleCase(T.name[k]) };
+  }
+  function titleCase(s) {
+    if (!s || s !== s.toUpperCase()) return s;
+    return s.toLowerCase().replace(/(^|[\s\-(])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+  }
+  function describe(e, t) {
+    const p = patterns[T.pattern[e.k]];
+    const r = t - e.t0;
+    const n = p.st.length;
+    const name = (i) => stationName(p.st[i]);
+    if (r < 0) return `Odjazd ze stacji ${name(0)} o ${hm(e.t0 + p.dep[0])}`;
+    if (r > p.dur) return `Przyjazd na stację ${name(n - 1)} o ${hm(e.t1)}`;
+    const loc = locate(p, r);
+    if (!loc.moving) {
+      if (loc.i === n - 1) return `Wjeżdża na stację ${name(loc.i)}`;
+      return `Na stacji ${name(loc.i)}, odjazd o ${hm(e.t0 + p.dep[loc.i])}`;
+    }
+    const kmh = (p.dist[loc.i + 1] - p.dist[loc.i]) / (p.arr[loc.i + 1] - p.dep[loc.i]) * 3.6;
+    return `Jedzie do stacji ${name(loc.i + 1)}, prędkość rozkładowa ${Math.round(kmh)} km/h`;
+  }
+
+  // keepMode: leave the axis under the map on the event line (used when picking a train from an event).
+  function selectTrain(e, keepMode) {
+    selectedTrain = e;
+    if (e && !keepMode) stripMode = 'train';
+    staticDirty = true;
+    lastInteraction = 0;
+    buildStrip();
+    lastDetail = 0;
+  }
+  // opts.focus: the operator picked this event, so zoom to it and show only its track and due trains.
+  function selectEvent(ev, opts = {}) {
+    selectedEvent = ev;
+    due = { id: null, at: 0, list: [], set: new Set() };
+    $('detail-empty').hidden = !!ev;
+    $('detail-body').hidden = !ev;
+    if (opts.focus && ev) {
+      focus = ev;
+      stripMode = 'event';
+      focusSig = '';
+      staticDirty = true;
+      if (W) focusMap(ev);
+    } else if (focus && focus !== ev) {
+      focus = null;
+      staticDirty = true;
+    }
+    if (ev) renderDetailStatic(ev);
+    buildStrip();
+    lastDetail = 0;
+  }
+
+  // ---------------------------------------------------------------- event detail
+  let detailSig = '';
+  function renderDetailStatic(ev) {
+    const cfg = EVENT_TYPES[ev.type], meta = eventMeta(ev);
+    $('d-sev').className = `pill sev sev-${ev.severity}`;
+    $('d-sev-glyph').setAttribute('href', `#g-${ev.type}`);
+    $('d-sev-label').textContent = SEVERITY[ev.severity].label;
+    $('d-status').className = `pill status sev-${ev.severity}`;
+    $('detail-title').textContent = cfg.label;
+    $('d-where').textContent = `${metres(meta.stationM)} od stacji ${meta.station}`;
+    $('d-lede').textContent = cfg.lede;
+    $('d-line').textContent = meta.line;
+    $('d-km').textContent = `km ${dec(ev.d / 1000, 1)}`;
+    $('d-coord').textContent = `${dec(meta.lat, 5)}° N ${dec(meta.lon, 5)}° E`;
+    $('d-fibre').textContent = meta.fibre;
+    $('d-signal').textContent = `${dec(ev.snr, 1)} dB powyżej tła`;
+    $('d-class').textContent = `${cfg.das}, pewność ${Math.round(ev.conf * 100)}%`;
+    $('d-id').textContent = ev.id;
+    $('detail').scrollTop = 0;
+    detailSig = '';
+    drawWaterfall(ev);
+  }
+
+  function updateDetail(t) {
+    const ev = selectedEvent;
+    if (!ev) return;
+    const status = statusAt(ev, t);
+    $('d-status').dataset.status = String(Math.max(0, status));
+    $('d-status-label').textContent = status < 0 ? 'Jeszcze niewykryte' : STATUS_LABELS[status];
+    $('d-when').textContent = status < 0
+      ? `W tym odtworzeniu zostanie wykryte o ${hm(ev.start)}, za ${etaText(ev.start - t)}`
+      : `Wykryto o ${hm(ev.start)}, ${ago(t - ev.start)}`;
+    $('act-ack').disabled = status < 0 || status >= 1;
+    $('act-dispatch').disabled = status < 0 || status >= 2;
+    $('act-clear').disabled = status < 0 || status >= 3;
+
+    const list = due.id === ev.id ? due.list : [];
+    const sig = `${ev.id}|${selectedTrain ? selectedTrain.k + ':' + selectedTrain.t0 : ''}|${list.slice(0, DUE_ROWS).map((x) => `${x.e.k}:${Math.round(x.eta / 60)}`).join(',')}|${list.length}`;
+    if (sig !== detailSig) {
+      detailSig = sig;
+      const rows = list.slice(0, DUE_ROWS);
+      $('d-due-count').textContent = list.length > DUE_ROWS
+        ? `najbliższe ${DUE_ROWS} z ${list.length} w ciągu 90 min`
+        : list.length ? 'w ciągu 90 min' : '';
+      $('d-due').innerHTML = rows.length
+        ? rows.map((x, i) => {
+          const k = x.e.k, title = trainTitle(k), p = patterns[T.pattern[k]];
+          return `<li><button type="button" class="due-row sev-${ev.severity}" data-due="${i}" aria-current="${selectedTrain === x.e}">`
+            + `<span class="eta${x.eta < 600 ? ' soon' : ''}">${x.eta < 0 ? 'przejeżdża' : etaText(x.eta)}</span>`
+            + `<span class="due-who"><strong>${esc(title.id)}${title.name ? ` · ${esc(title.name)}` : ''}</strong>`
+            + `<span>${esc(stationName(p.st[0]))} → ${esc(stationName(p.st[p.st.length - 1]))}, przejazd o ${hm(t + x.eta)}</span></span></button></li>`;
+        }).join('')
+        : '<li><p class="empty-note">Według rozkładu w ciągu 90 minut przez to miejsce nie przejedzie żaden pociąg.</p></li>';
+    }
+    const log = logEntries(ev, t);
+    $('d-log').innerHTML = log.length
+      ? log.map((l) => `<li><span class="t">${hm(l.at)}</span><span>${esc(l.text)}</span></li>`).join('')
+      : '<li><span class="t"></span><span>Na razie brak wpisów.</span></li>';
+  }
+
+  function logEntries(ev, t) {
+    if (t < ev.start) return [];
+    const cfg = EVENT_TYPES[ev.type];
+    const o = overrides.get(ev.id) || [];
+    const out = [{ at: ev.start, text: `Wykryto na światłowodzie, klasa ${cfg.das} (pewność ${Math.round(ev.conf * 100)}%)` }];
+    const texts = {
+      1: ['Potwierdzone przez dyżurnego', 'Potwierdzone przez Ciebie'],
+      2: [ev.severity === 'critical' ? 'Wysłano ekipę, dyżurny ruchu poproszony o ostrzeżenie nadjeżdżających pociągów' : 'Wysłano ekipę utrzymania', 'Ekipa wysłana przez Ciebie'],
+      3: ['Sygnał ustał, zdarzenie zamknięte', 'Zamknięte przez Ciebie'],
+    };
+    for (let l = 1; l <= 3; l++) {
+      const at = levelTime(ev, l);
+      if (at <= t && Number.isFinite(at)) out.push({ at, text: texts[l][o[l] === at ? 1 : 0] });
+    }
+    return out.sort((a, b) => a.at - b.at);
+  }
+
+  function act(level) {
+    const ev = selectedEvent;
+    if (!ev) return;
+    const t = clock.sec;
+    if (statusAt(ev, t) >= level) return;
+    const o = overrides.get(ev.id) || [];
+    o[level] = t;
+    for (let l = 1; l < level; l++) if (levelTime(ev, l) > t) o[l] = t;
+    overrides.set(ev.id, o);
+    lastDetail = 0;
+  }
+  $('act-ack').addEventListener('click', () => act(1));
+  $('act-dispatch').addEventListener('click', () => act(2));
+  $('act-clear').addEventListener('click', () => act(3));
+  $('d-due').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-due]');
+    if (!b) return;
+    const x = due.list[+b.dataset.due];
+    if (x) selectTrain(x.e, true);
+  });
+
+  // An illustration of the event's signature on a DAS waterfall, not measured data.
+  function drawWaterfall(ev) {
+    const c = $('d-waterfall');
+    const w = c.clientWidth, h = c.clientHeight;
+    if (!w || !h) return; // inside a closed <details>; drawn when it opens
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+    const cols = 120, rows = 54;
+    const off = document.createElement('canvas');
+    off.width = cols; off.height = rows;
+    const octx = off.getContext('2d');
+    const img = octx.createImageData(cols, rows);
+    const rng = mulberry32(ev.seed);
+    const bg = hexRgb(theme.surface2), fg = hexRgb(theme.flow);
+    for (let j = 0; j < rows; j++) {
+      const tt = j / (rows - 1);
+      for (let i = 0; i < cols; i++) {
+        const x = i / (cols - 1) * 2 - 1;
+        const v = Math.min(1, rng() * 0.2 + signature(ev.type, x, tt) * (0.6 + ev.conf * 0.4));
+        const idx = (j * cols + i) * 4;
+        img.data[idx] = bg[0] + (fg[0] - bg[0]) * v;
+        img.data[idx + 1] = bg[1] + (fg[1] - bg[1]) * v;
+        img.data[idx + 2] = bg[2] + (fg[2] - bg[2]) * v;
+        img.data[idx + 3] = 255;
+      }
+    }
+    octx.putImageData(img, 0, 0);
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = true;
+    g.drawImage(off, 0, 0, c.width, c.height);
+    g.strokeStyle = theme.ink3;
+    g.setLineDash([2, 4]);
+    g.lineWidth = dpr;
+    g.beginPath();
+    g.moveTo(c.width / 2, 0);
+    g.lineTo(c.width / 2, c.height);
+    g.stroke();
+  }
+  function signature(type, x, t) {
+    if (type === 'blast') {
+      const t0 = 0.3;
+      if (t < t0) return 0;
+      const dt = t - t0, front = Math.abs(x) - dt * 3.4;
+      return 1.1 * Math.exp(-(front * front) / 0.004) * Math.exp(-dt * 2.2) + Math.exp(-(x * x) / 0.01) * Math.exp(-dt * 5);
+    }
+    if (type === 'vehicle') {
+      const tStop = 0.45;
+      if (t < tStop) { const xp = -0.95 + (t / tStop) * 0.95; return 0.85 * Math.exp(-((x - xp) ** 2) / 0.0016); }
+      return Math.exp(-(x * x) / 0.0012) * (0.55 + 0.2 * Math.sin(t * 90));
+    }
+    if (type === 'trespass') {
+      if (t < 0.15 || t > 0.85) return 0;
+      const phase = (t * 24) % 1, xc = -0.05 + (t - 0.15) * 0.15;
+      return 0.9 * Math.exp(-((phase - 0.15) ** 2) / 0.006) * Math.exp(-((x - xc) ** 2) / 0.003);
+    }
+    let v = 0;
+    for (const b of [0.06, 0.17, 0.25, 0.39, 0.48, 0.6, 0.69, 0.81, 0.92]) {
+      const dt = t - b;
+      if (dt >= 0 && dt < 0.07) v += Math.exp(-dt * 55) * Math.exp(-((x - 0.06) ** 2) / 0.012);
+    }
+    return 0.95 * v;
+  }
+  function hexRgb(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+    const n = m ? parseInt(m[1], 16) : 0x808080;
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  for (const d of document.querySelectorAll('details.more')) {
+    d.addEventListener('toggle', () => { if (d.open && selectedEvent) drawWaterfall(selectedEvent); });
+  }
+
+  // ---------------------------------------------------------------- event list
+  let listSig = '';
+  function renderEventList(t) {
+    const rows = visible.map((ev) => ({ ev, s: statusAt(ev, t) }))
+      .sort((a, b) => (a.s === 3) - (b.s === 3) || SEVERITY[b.ev.severity].rank - SEVERITY[a.ev.severity].rank || b.ev.start - a.ev.start);
+    const active = rows.filter((r) => r.s < 3);
+    $('sev-counts').innerHTML = SEV_KEYS.map((k) => {
+      const n = active.filter((r) => r.ev.severity === k).length;
+      const f = SEVERITY[k].forms;
+      return `<span class="sev-${k}"><i></i><b>${n}</b>${plural(n, f[0], f[1], f[2])}</span>`;
+    }).join('');
+    const sig = rows.map((r) => `${r.ev.id}:${r.s}`).join(',') + `|${selectedEvent ? selectedEvent.id : ''}`;
+    if (sig === listSig) return;
+    listSig = sig;
+    const row = ({ ev, s }) => {
+      const cfg = EVENT_TYPES[ev.type], meta = eventMeta(ev);
+      return `<li><button type="button" class="ev-row sev-${ev.severity}${s === 3 ? ' cleared' : ''}" data-id="${ev.id}" aria-current="${ev === selectedEvent}">`
+        + `<span class="mk">${glyphSvg(ev.type)}</span>`
+        + `<span><span class="ev-title">${esc(cfg.label)}</span><span class="ev-sub">${esc(meta.station)}</span></span>`
+        + `<span class="ev-when"><span class="mono">${hm(ev.start)}</span>${STATUS_LABELS[s]}</span></button></li>`;
+    };
+    const cleared = rows.filter((r) => r.s === 3);
+    let html = active.length
+      ? `<li class="list-label eyebrow">Aktywne · ${active.length}</li>${active.map(row).join('')}`
+      : '<li><p class="empty-note" style="padding: 8px">Brak aktywnych zdarzeń pasujących do filtrów.</p></li>';
+    if (cleared.length) html += `<li class="list-label eyebrow">Zamknięte w ciągu ostatniej godziny · ${cleared.length}</li>${cleared.map(row).join('')}`;
+    $('event-list').innerHTML = html;
+  }
+  $('event-list').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-id]');
+    if (!b) return;
+    selectEvent(day.events.find((x) => x.id === b.dataset.id) || null, { focus: true });
+  });
+
+  // ---------------------------------------------------------------- line view
+  let strip = null;
+  let stripUserScroll = 0;
+  const stripBox = $('strip-scroll');
+  const stripSvg = $('strip');
+
+  function xAtDist(xs, p, d) {
+    const n = p.dist.length;
+    if (d <= p.dist[0]) return xs[0];
+    if (d >= p.dist[n - 1]) return xs[n - 1];
+    let i = 0;
+    while (i < n - 2 && p.dist[i + 1] < d) i++;
+    const span = p.dist[i + 1] - p.dist[i];
+    return xs[i] + (xs[i + 1] - xs[i]) * (span > 0 ? (d - p.dist[i]) / span : 0);
+  }
+
+  function buildStrip() {
+    let mode = null;
+    if (stripMode === 'event' && selectedEvent) mode = 'event';
+    else if (selectedTrain) mode = 'train';
+    else if (selectedEvent) mode = 'event';
+    $('line-empty').hidden = !!mode;
+    $('line-head').hidden = !mode;
+    stripBox.hidden = !mode;
+    const seg = $('strip-modes');
+    seg.hidden = !(selectedEvent && selectedTrain);
+    for (const b of seg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+    if (!mode) { stripSvg.innerHTML = ''; strip = null; return; }
+    if (mode === 'event') buildEventStrip(selectedEvent); else buildTrainStrip(selectedTrain);
+  }
+
+  function buildTrainStrip(e) {
+    const k = e.k, p = patterns[T.pattern[k]], n = p.st.length;
+    const title = trainTitle(k), route = D.routes[T.route[k]];
+    $('line-title').textContent = title.name ? `${title.id} · ${title.name}` : title.id;
+    const sub = $('line-sub');
+    sub.textContent = `${stationName(p.st[0])} → ${stationName(p.st[n - 1])}`;
+    sub.title = `${D.agencies[route.agency].name} · ${n} ${plural(n, 'stacja', 'stacje', 'stacji')} · ${nf.format(Math.round((p.dist[n - 1] - p.dist[0]) / 1000))} km`;
+
+    const Hs = Math.max(140, stripBox.clientHeight);
+    const lineY = Math.round(Hs * 0.6);
+    const left = 26, right = 150, gap = 62;
+    const avail = Math.max(240, stripBox.clientWidth - left - right);
+    const d0 = p.dist[0], total = Math.max(1, p.dist[n - 1] - d0);
+    const xs = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const prop = left + (p.dist[i] - d0) / total * avail;
+      xs[i] = i ? Math.max(prop, xs[i - 1] + gap) : left;
+    }
+    const width = Math.ceil(xs[n - 1] + right);
+    let html = `<line class="st-base" x1="${xs[0]}" x2="${xs[n - 1]}" y1="${lineY}" y2="${lineY}"/><path class="st-progress" id="st-progress" d="M${xs[0]} ${lineY}H${xs[0]}"/>`;
+    for (let i = 0; i < n; i++) {
+      const x = xs[i].toFixed(1);
+      const arr = i > 0 ? hm(e.t0 + p.arr[i]) : null, dep = i < n - 1 ? hm(e.t0 + p.dep[i]) : null;
+      const times = arr && dep && arr !== dep
+        ? `<text class="st-time" x="${x}" y="${lineY + 22}" text-anchor="middle">${arr}</text><text class="st-time dep" x="${x}" y="${lineY + 35}" text-anchor="middle">${dep}</text>`
+        : `<text class="st-time" x="${x}" y="${lineY + 22}" text-anchor="middle">${arr || dep}</text>`;
+      html += `<g class="st" id="st-${i}"><circle class="st-dot" cx="${x}" cy="${lineY}" r="5"/>`
+        + `<text class="st-name" transform="translate(${(xs[i] + 3).toFixed(1)} ${lineY - 12}) rotate(-38)">${esc(stationName(p.st[i]))}</text>${times}</g>`;
+    }
+    html += '<g id="st-events"></g><rect class="st-train" id="st-train" x="-13" y="-5.5" width="26" height="11" rx="5.5"/>';
+    stripSvg.setAttribute('width', width);
+    stripSvg.setAttribute('height', Hs);
+    stripSvg.setAttribute('viewBox', `0 0 ${width} ${Hs}`);
+    stripSvg.innerHTML = html;
+    strip = { mode: 'train', e, p, xs, lineY, key: '', eventSig: null };
+    stripBox.scrollLeft = 0;
+    stripUserScroll = 0;
+    refreshStripEvents();
+    updateStrip(clock.sec, true);
+  }
+
+  function refreshStripEvents() {
+    if (!strip || strip.mode !== 'train') return;
+    const { p, xs, lineY } = strip;
+    const n = p.dist.length;
+    const marks = [];
+    for (const ev of visible) {
+      if (statusAt(ev, clock.sec) === 3) continue;
+      const h = trackHits(ev).find((x) => x.shape === p.shape);
+      if (!h || h.d < p.dist[0] - 50 || h.d > p.dist[n - 1] + 50) continue;
+      marks.push({ ev, x: xAtDist(xs, p, h.d) });
+    }
+    const sig = marks.map((m) => m.ev.id).join(',') + (selectedEvent ? selectedEvent.id : '');
+    if (sig === strip.eventSig) return;
+    strip.eventSig = sig;
+    $('st-events').innerHTML = marks.map((m) =>
+      `<g class="st-event sev-${m.ev.severity}${m.ev === selectedEvent ? ' selected' : ''}" data-id="${m.ev.id}" transform="translate(${m.x.toFixed(1)} ${lineY})">`
+      + `<title>${esc(EVENT_TYPES[m.ev.type].label)}, stacja ${esc(eventMeta(m.ev).station)}</title>`
+      + `<rect x="-9" y="-9" width="18" height="18" rx="4"/><use href="#g-${m.ev.type}" class="glyph" x="-6" y="-6" width="12" height="12"/></g>`).join('');
+  }
+
+  // The event's line: stations by distance from the event, with the trains due there moving towards it.
+  function buildEventStrip(ev) {
+    const cfg = EVENT_TYPES[ev.type], meta = eventMeta(ev), line = lineOf(ev.shape), p = line.rep;
+    $('line-title').textContent = line.title;
+    const sub = $('line-sub');
+    sub.textContent = `${cfg.label}, ${metres(meta.stationM)} od stacji ${meta.station}`;
+    sub.title = '';
+    if (!p) {
+      stripSvg.innerHTML = '';
+      strip = null;
+      $('line-status').textContent = 'Brak stacji z rozkładu na tym torze';
+      return;
+    }
+    const n = p.st.length;
+    const Hs = Math.max(150, stripBox.clientHeight);
+    const lineY = Math.round(Hs * 0.52);
+    const left = 26, right = 150, gap = 62;
+    const avail = Math.max(240, stripBox.clientWidth - left - right);
+    const d0 = p.dist[0], total = Math.max(1, p.dist[n - 1] - d0);
+    const xs = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const prop = left + (p.dist[i] - d0) / total * avail;
+      xs[i] = i ? Math.max(prop, xs[i - 1] + gap) : left;
+    }
+    const evX = xAtDist(xs, p, ev.d);
+    const width = Math.ceil(xs[n - 1] + right);
+    let html = `<line class="st-base" x1="${xs[0]}" x2="${xs[n - 1]}" y1="${lineY}" y2="${lineY}"/>`;
+    for (let i = 0; i < n; i++) {
+      const x = xs[i].toFixed(1);
+      const km = (p.dist[i] - ev.d) / 1000;
+      const abs = Math.abs(km);
+      const dist = `${km > 0.05 ? '+' : km < -0.05 ? '−' : ''}${abs < 10 ? dec(abs, 1) : Math.round(abs)} km`;
+      html += `<g class="st"><circle class="st-dot" cx="${x}" cy="${lineY}" r="5"/>`
+        + `<text class="st-name" transform="translate(${(xs[i] + 3).toFixed(1)} ${lineY - 12}) rotate(-38)">${esc(stationName(p.st[i]))}</text>`
+        + `<text class="st-dist" x="${x}" y="${lineY + 20}" text-anchor="middle">${dist}</text></g>`;
+    }
+    html += `<line class="st-event-line" x1="${evX}" x2="${evX}" y1="6" y2="${Hs - 6}"/><g id="st-trains"></g>`
+      + `<g class="st-mark sev-${ev.severity}" transform="translate(${evX.toFixed(1)} ${lineY})"><title>${esc(cfg.label)}</title>`
+      + `<rect x="-11" y="-11" width="22" height="22" rx="5"/><use href="#g-${ev.type}" class="glyph" x="-7" y="-7" width="14" height="14"/></g>`;
+    stripSvg.setAttribute('width', width);
+    stripSvg.setAttribute('height', Hs);
+    stripSvg.setAttribute('viewBox', `0 0 ${width} ${Hs}`);
+    stripSvg.innerHTML = html;
+    strip = { mode: 'event', ev, p, xs, lineY, trainSig: null, etas: [] };
+    stripBox.scrollLeft = Math.max(0, evX - stripBox.clientWidth / 2);
+    updateEventStrip(clock.sec);
+  }
+
+  function shapeSign(ev, shape) {
+    if (!ev.signs) ev.signs = new Map();
+    if (!ev.signs.has(shape)) {
+      const h = trackHits(ev).find((x) => x.shape === shape);
+      const tangent = (sh, d) => { const a = along(sh, d - 60), b = along(sh, d + 60); return [b.x - a.x, b.y - a.y]; };
+      const u = tangent(shapes[ev.shape], ev.d), w = tangent(shapes[shape], h ? h.d : 0);
+      ev.signs.set(shape, u[0] * w[0] + u[1] * w[1] >= 0 ? 1 : -1);
+    }
+    return ev.signs.get(shape);
+  }
+  // A due train's place on the event's axis: the distance it still has to run to the event, laid back from the event.
+  function axisPosition(ev, e, t) {
+    const p = patterns[T.pattern[e.k]];
+    const h = trackHits(ev).find((x) => x.shape === p.shape);
+    if (!h) return null;
+    const sign = shapeSign(ev, p.shape);
+    const loc = locate(p, Math.min(Math.max(t - e.t0, 0), p.dur));
+    return { d: ev.d - sign * (h.d - loc.d), dir: sign };
+  }
+
+  function updateEventStrip(t) {
+    const { ev, p, xs, lineY } = strip;
+    const list = (due.id === ev.id ? due.list : []).slice(0, 12);
+    const sig = list.map((x) => `${x.e.k}:${x.e.t0}`).join(',') + `|${selectedTrain ? `${selectedTrain.k}:${selectedTrain.t0}` : ''}`;
+    if (sig !== strip.trainSig) {
+      strip.trainSig = sig;
+      strip.etas = [];
+      $('st-trains').innerHTML = list.map((x, i) => {
+        const title = trainTitle(x.e.k);
+        return `<g class="st-due${selectedTrain === x.e ? ' selected' : ''}" data-due="${i}" id="st-due-${i}"><title>${esc(title.id)}</title>`
+          + `<rect x="-12" y="-5.5" width="24" height="11" rx="5.5"/><path id="st-due-dir-${i}" d="M13 -5L19 0L13 5Z"/>`
+          + `<text id="st-due-label-${i}" y="38" text-anchor="middle">${esc(title.id)} <tspan class="eta-t" id="st-due-eta-${i}"></tspan></text></g>`;
+      }).join('');
+    }
+    const shown = [];
+    const last = p.dist.length - 1;
+    list.forEach((x, i) => {
+      const g = $(`st-due-${i}`);
+      if (!g) return;
+      const pos = axisPosition(ev, x.e, t);
+      // A train still beyond either end of the line would pile up on the end station; leave it off the axis.
+      if (!pos || pos.d < p.dist[0] - 500 || pos.d > p.dist[last] + 500) { g.setAttribute('visibility', 'hidden'); return; }
+      g.removeAttribute('visibility');
+      const px = xAtDist(xs, p, pos.d);
+      g.setAttribute('transform', `translate(${px.toFixed(1)} ${lineY})`);
+      $(`st-due-dir-${i}`).setAttribute('d', pos.dir > 0 ? 'M13 -5L19 0L13 5Z' : 'M-13 -5L-19 0L-13 5Z');
+      const eta = x.eta < 0 ? 'przejeżdża' : etaText(x.eta);
+      if (strip.etas[i] !== eta) { strip.etas[i] = eta; $(`st-due-eta-${i}`).textContent = eta; }
+      shown.push({ i, px, w: (trainTitle(x.e.k).id.length + eta.length + 1) * 6.4 });
+    });
+    // Stack labels into up to three rows; a label that still collides stays hidden (the train keeps its tooltip).
+    shown.sort((a, b) => a.px - b.px);
+    const rowEnd = [-Infinity, -Infinity, -Infinity];
+    for (const it of shown) {
+      const label = $(`st-due-label-${it.i}`);
+      const row = rowEnd.findIndex((end) => it.px - it.w / 2 > end + 8);
+      if (row < 0) { label.setAttribute('visibility', 'hidden'); continue; }
+      label.removeAttribute('visibility');
+      label.setAttribute('y', String(38 + row * 14));
+      rowEnd[row] = it.px + it.w / 2;
+    }
+    const n = due.id === ev.id ? due.list.length : 0;
+    $('line-status').textContent = n
+      ? `${n} ${trainsWord(n)} w ciągu 90 min`
+      : 'Brak pociągów w ciągu 90 min';
+  }
+
+  function updateStrip(t, force) {
+    if (!strip) return;
+    if (strip.mode === 'event') { updateEventStrip(t); return; }
+    const { e, p, xs, lineY } = strip;
+    const n = p.st.length;
+    const r = t - e.t0;
+    let state, idx = -1, moving = false, d;
+    if (r < 0) { state = 'before'; d = p.dist[0]; }
+    else if (r > p.dur) { state = 'after'; d = p.dist[n - 1]; }
+    else { const loc = locate(p, r); state = 'on'; d = loc.d; moving = loc.moving; idx = loc.i; }
+    const x = xAtDist(xs, p, d);
+    $('st-progress').setAttribute('d', `M${xs[0]} ${lineY}H${x.toFixed(1)}`);
+    const trainEl = $('st-train');
+    trainEl.setAttribute('transform', `translate(${x.toFixed(1)} ${lineY})`);
+    trainEl.classList.toggle('stopped', !moving);
+    const key = `${state}:${idx}:${moving}`;
+    if (key !== strip.key || force) {
+      strip.key = key;
+      for (let i = 0; i < n; i++) {
+        const g = $(`st-${i}`);
+        const passed = state === 'after' || (state === 'on' && (moving ? i <= idx : i < idx));
+        g.classList.toggle('passed', passed);
+        g.classList.toggle('current', state === 'on' && !moving && i === idx);
+        g.classList.toggle('next', state === 'on' && moving && i === idx + 1);
+      }
+      $('line-status').textContent = describe(e, t);
+    }
+    if (performance.now() - stripUserScroll > 8000) {
+      const view0 = stripBox.scrollLeft, vw = stripBox.clientWidth;
+      if (x < view0 + 60 || x > view0 + vw - 170) stripBox.scrollLeft = Math.max(0, x - vw * 0.3);
+    }
+  }
+  for (const evName of ['wheel', 'pointerdown', 'touchstart']) stripBox.addEventListener(evName, () => { stripUserScroll = performance.now(); }, { passive: true });
+  stripSvg.addEventListener('click', (ev) => {
+    const g = ev.target.closest('.st-event');
+    if (g) { selectEvent(day.events.find((x) => x.id === g.dataset.id) || null, { focus: true }); return; }
+    const d = ev.target.closest('.st-due');
+    if (d && strip && strip.mode === 'event') {
+      const x = (due.id === strip.ev.id ? due.list : [])[+d.dataset.due];
+      if (x) selectTrain(x.e, true);
+    }
+  });
+  $('strip-modes').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-mode]');
+    if (!b) return;
+    stripMode = b.dataset.mode;
+    buildStrip();
+  });
+
+  function focusShapes() {
+    if (!focus) return [];
+    const set = new Set([focus.shape]);
+    if (due.id === focus.id) for (const x of due.list) set.add(patterns[T.pattern[x.e.k]].shape);
+    return [...set].sort((a, b) => a - b);
+  }
+  // Zoom to the track either side of the event and the nearest trains due there.
+  function focusMap(ev) {
+    const t = clock.sec, sh = shapes[ev.shape];
+    const pts = [];
+    for (let k = -20000; k <= 20000; k += 2000) pts.push(along(sh, ev.d + k));
+    for (const x of trainsDue(ev, t).slice(0, 3)) {
+      const p = patterns[T.pattern[x.e.k]];
+      pts.push(along(shapes[p.shape], locate(p, Math.min(Math.max(t - x.e.t0, 0), p.dur)).d));
+    }
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const q of pts) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }
+    const margin = 60;
+    let s = Math.min((W - 2 * margin) / Math.max(x1 - x0, 1e-9), (H - 2 * margin) / Math.max(y1 - y0, 1e-9));
+    s = Math.min(Math.max(s, fitS * 1.5), fitS * 40);
+    userMoved = true;
+    flyTo((x0 + x1) / 2, (y0 + y1) / 2, s);
+  }
+  function exitFocus() {
+    if (focus) { focus = null; staticDirty = true; }
+    fit(true);
+  }
+  $('focus-exit').addEventListener('click', exitFocus);
+
+  $('line-locate').addEventListener('click', () => {
+    if (strip && strip.mode === 'event') {
+      focus = strip.ev;
+      focusSig = '';
+      staticDirty = true;
+      focusMap(strip.ev);
+      return;
+    }
+    if (!selectedTrain) return;
+    const e = selectedTrain, p = patterns[T.pattern[e.k]];
+    const r = Math.min(Math.max(clock.sec - e.t0, 0), p.dur);
+    const pt = along(shapes[p.shape], locate(p, r).d);
+    centreOn(pt.x, pt.y, 6);
+  });
+
+  // ---------------------------------------------------------------- map input
+  const tooltip = $('tooltip');
+  function showTooltip(cx, cy, html) {
+    tooltip.innerHTML = html;
+    tooltip.hidden = false;
+    const r = tooltip.getBoundingClientRect();
+    let x = cx + 14, y = cy + 14;
+    if (x + r.width > window.innerWidth - 8) x = cx - r.width - 14;
+    if (y + r.height > window.innerHeight - 8) y = cy - r.height - 14;
+    tooltip.style.left = `${Math.max(8, x)}px`;
+    tooltip.style.top = `${Math.max(8, y)}px`;
+  }
+  function hideTooltip() { tooltip.hidden = true; }
+
+  function itemAt(px, py, touch) {
+    let best = null, bd = Infinity;
+    for (const h of eventHits) {
+      const d = Math.hypot(h.x - px, h.y - py);
+      if (d <= h.r + (touch ? 8 : 0) && d < bd) { bd = d; best = { ev: h.ev }; }
+    }
+    if (best) return best;
+    const radius = touch ? 20 : 11;
+    bd = radius * radius;
+    for (let i = 0; i < hits.n; i++) {
+      const dx = hits.x[i] - px, dy = hits.y[i] - py, d2 = dx * dx + dy * dy;
+      if (d2 < bd) { bd = d2; best = { train: hits.e[i] }; }
+    }
+    return best;
+  }
+
+  const pointers = new Map();
+  let drag = null;
+  const pinchState = () => {
+    const [a, b] = [...pointers.values()];
+    return { dist: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+  };
+  canvas.addEventListener('pointerdown', (ev) => {
+    flight = null;
+    canvas.setPointerCapture(ev.pointerId);
+    pointers.set(ev.pointerId, { x: ev.offsetX, y: ev.offsetY });
+    drag = { moved: false, x: ev.offsetX, y: ev.offsetY, pinch: pointers.size === 2 ? pinchState() : null };
+    hideTooltip();
+  });
+  canvas.addEventListener('pointermove', (ev) => {
+    if (pointers.has(ev.pointerId)) {
+      const prev = pointers.get(ev.pointerId);
+      pointers.set(ev.pointerId, { x: ev.offsetX, y: ev.offsetY });
+      if (pointers.size === 2 && drag && drag.pinch) {
+        const now = pinchState();
+        zoomAt(now.mx, now.my, now.dist / (drag.pinch.dist || 1));
+        view.cx -= (now.mx - drag.pinch.mx) / view.s;
+        view.cy -= (now.my - drag.pinch.my) / view.s;
+        drag.pinch = now;
+        drag.moved = true;
+      } else if (pointers.size === 1 && drag) {
+        if (Math.hypot(ev.offsetX - drag.x, ev.offsetY - drag.y) > 4) drag.moved = true;
+        if (drag.moved) {
+          view.cx -= (ev.offsetX - prev.x) / view.s;
+          view.cy -= (ev.offsetY - prev.y) / view.s;
+          userMoved = true;
+          invalidate();
+          canvas.classList.add('dragging');
+        }
+      }
+      return;
+    }
+    const item = itemAt(ev.offsetX, ev.offsetY, false);
+    canvas.classList.toggle('over-item', !!item);
+    if (!item) { hideTooltip(); return; }
+    if (item.ev) {
+      const x = item.ev, meta = eventMeta(x), s = statusAt(x, clock.sec);
+      showTooltip(ev.clientX, ev.clientY,
+        `<strong>${esc(EVENT_TYPES[x.type].label)}</strong>${SEVERITY[x.severity].label} · ${STATUS_LABELS[s]}<br>`
+        + `${esc(metres(meta.stationM))} od stacji ${esc(meta.station)}<br><span style="color:var(--ink-3)">Symulacja · wykryto o ${hm(x.start)}</span>`);
+      return;
+    }
+    const e = item.train, title = trainTitle(e.k), p = patterns[T.pattern[e.k]];
+    showTooltip(ev.clientX, ev.clientY,
+      `<strong>${esc(title.id)}${title.name ? ` · ${esc(title.name)}` : ''}</strong>`
+      + `${esc(stationName(p.st[0]))} → ${esc(stationName(p.st[p.st.length - 1]))}<br>`
+      + `${esc(describe(e, clock.sec))}<br><span style="color:var(--ink-3)">${esc(D.agencies[D.routes[T.route[e.k]].agency].name)}</span>`);
+  });
+  const release = (ev) => {
+    const wasClick = drag && !drag.moved && pointers.size === 1;
+    pointers.delete(ev.pointerId);
+    canvas.classList.remove('dragging');
+    if (wasClick && ev.type === 'pointerup') {
+      const item = itemAt(ev.offsetX, ev.offsetY, ev.pointerType === 'touch');
+      if (item && item.ev) selectEvent(item.ev, { focus: true });
+      else if (item && item.train) selectTrain(item.train);
+    }
+    if (pointers.size === 0) drag = null;
+    else if (drag) drag.pinch = null;
+  };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('pointerleave', () => { if (!pointers.size) hideTooltip(); });
+  canvas.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    const delta = ev.deltaMode === 1 ? ev.deltaY * 16 : ev.deltaY;
+    zoomAt(ev.offsetX, ev.offsetY, Math.exp(-delta * 0.0016));
+  }, { passive: false });
+  canvas.addEventListener('dblclick', (ev) => zoomAt(ev.offsetX, ev.offsetY, 2));
+  canvas.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && focus) { ev.preventDefault(); exitFocus(); return; }
+    const step = 80 / view.s;
+    const keys = {
+      '+': () => zoomAt(W / 2, H / 2, 1.5), '=': () => zoomAt(W / 2, H / 2, 1.5), '-': () => zoomAt(W / 2, H / 2, 1 / 1.5),
+      ArrowLeft: () => { view.cx -= step; }, ArrowRight: () => { view.cx += step; },
+      ArrowUp: () => { view.cy -= step; }, ArrowDown: () => { view.cy += step; },
+    };
+    if (!keys[ev.key]) return;
+    ev.preventDefault();
+    keys[ev.key]();
+    userMoved = true;
+    invalidate();
+  });
+  $('zoom-in').addEventListener('click', () => zoomAt(W / 2, H / 2, 1.6));
+  $('zoom-out').addEventListener('click', () => zoomAt(W / 2, H / 2, 1 / 1.6));
+  $('zoom-fit').addEventListener('click', exitFocus);
+
+  // ---------------------------------------------------------------- boot
+  const v = D.feed.version.slice(0, 10).split('-');
+  $('about-feed').textContent = `Rozkład: otwarte dane PKP Polskich Linii Kolejowych, GTFS: ${D.feed.publisher} (wydanie z ${v[2]}.${v[1]}.${v[0]}, ważne do ${shortDateFmt.format(ymd(D.feed.end))}).`;
+  for (const k of SEV_KEYS) $(`key-${k}`).innerHTML = glyphSvg('trespass');
+  $('key-cleared').innerHTML = glyphSvg('trespass');
+  $('key-types').textContent = TYPE_KEYS.map((k) => EVENT_TYPES[k].short.toLocaleLowerCase('pl')).join(', ');
+  readTheme();
+  buildFilters();
+  setupMenu('about-btn', 'about-menu');
+  setupMenu('filters-btn', 'filters-menu');
+  setupMenu('key-btn', 'key-menu');
+  syncControls();
+  new ResizeObserver(resizeMap).observe(canvas.parentElement);
+  let stripWidth = 0;
+  new ResizeObserver(() => {
+    if (Math.abs(stripBox.clientWidth - stripWidth) > 40) { stripWidth = stripBox.clientWidth; buildStrip(); }
+  }).observe($('dash'));
+  if (document.fonts) document.fonts.ready.then(() => { readTheme(); invalidate(true); if (strip) buildStrip(); });
+  resizeMap();
+  requestAnimationFrame((t) => { time.last = t; frame(t); });
+})();
+</script>

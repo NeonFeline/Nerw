@@ -12,6 +12,7 @@ Synthetic distributed acoustic sensing (DAS) recordings for a fibre optic cable 
 - `model/`: LeJEPA-style backbone (masked reconstruction + SIGReg), training, anomaly calibration, inference and evaluation. Stage 2 (`segmenter.py`, `finetune.py`, `evaluate_classes.py`) puts a per-pixel classification head on the pretrained backbone.
 - `make_showcase.py`: renders one overview figure of a dataset into `data/showcase/`.
 - `specfem2d/surface_blast/`: standalone SPECFEM2D elastic simulation. Nothing else imports it (see the end of this file).
+- `dashboard/`: a static, Polish-language rail monitoring demo. Scheduled trains across Poland from the PKP PLK GTFS timetable, plus simulated trackside events. Nothing else imports it (see "Rail dashboard" below).
 
 ## Commands
 
@@ -115,6 +116,19 @@ The split is by **site family**, not by seed. `SITE_FAMILIES` holds each family'
 - **High-pass.** Both stages take `--highpass-hz` (default 2 Hz) and `WindowDataset` applies it once at load. The value is recorded in the checkpoint so the two stages cannot silently disagree about what the model was fed. Compare against the `baseline_rms` AUC before believing any model number: on raw windows the model reproduced a raw-energy detector to three decimals.
 - **Stage 2 (`model/segmenter.py`, `model/finetune.py`).** The head maps each token to a per-channel class distribution for its patch, mirroring the reconstruction head, then expands back to full time resolution -- so predictions are constant within a time patch. `--freeze-epochs` trains the head alone first so its early gradients cannot wreck the pretrained features, then unfreezes the backbone at `--backbone-lr-scale` of the head's learning rate. Background outnumbers the rare classes by four or five orders of magnitude, so `inverse_frequency_weights` is on by default. `--scratch` is the ablation that says whether the LeJEPA stage bought anything.
 - `model/tests/test_smoke.py` uses `model.data.make_synthetic_das`, a simple ambient-noise generator unrelated to `simulate_das.py`.
+
+## Rail dashboard
+
+`dashboard/index.html` is one self-contained page (no build step, no framework). It loads `dashboard/rail_data.js`, which `dashboard/build_rail_data.py` packs from a GTFS feed unzipped into `polish_trains/`. Both the feed and the generated file are gitignored.
+
+```bash
+uv run python dashboard/build_rail_data.py --gtfs polish_trains --out dashboard/rail_data.js   # ~20 s
+xdg-open dashboard/index.html                                                                   # works from file://
+```
+
+- Trains are placed from the timetable alone: no real-time delays. Stop times are stored as metres along a simplified shape. `cumulative_metres()` in the build and `decodeLine()` in the page compute distance with the same formula, so change them together.
+- Every event on the page is simulated and seeded per service day. The page labels them as simulations everywhere they appear; keep it that way. Their `das` field is a `CLASS_IDS` name from `simulate_das.py` (`footsteps`, `burst`, `vehicle_stop`, `digging`).
+- The UI copy is Polish. Station names are never declined: phrase things as "od stacji X" so the nominative stays correct, and use `plural()` for counts.
 
 ## specfem2d/surface_blast
 

@@ -15,6 +15,11 @@ data/**
 # Training artifacts (checkpoints, scores, logs)
 runs/
 
+# Rail dashboard: the GTFS feed (~96 MB) and the data file built from it (~8 MB).
+# Rebuild with: uv run python dashboard/build_rail_data.py
+polish_trains/
+dashboard/rail_data.js
+
 # Python
 __pycache__/
 *.py[cod]
