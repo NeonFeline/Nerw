@@ -438,7 +438,12 @@
     #focus-exit { position: fixed; top: 58px; left: 50%; transform: translateX(-50%); }
     .map-panel .tool-btn, #about-btn { height: 38px; min-width: 38px; padding: 0 11px; justify-content: center; border-radius: 19px; box-shadow: var(--shadow); }
     .map-panel .menu-wrap .btn-label, #about-btn .btn-label { display: none; }
-    .menu { max-height: calc(100dvh - var(--sheet-peek) - 70px); }
+    /* Menus open as a full-width panel under the floating buttons instead of hanging off a small button. */
+    .menu {
+      position: fixed; top: 58px; left: 10px; right: 10px;
+      width: auto; max-width: none;
+      max-height: calc(100dvh - var(--sheet-peek) - 76px);
+    }
     .zoom { bottom: calc(var(--sheet-peek) + 14px); }
     .topbar {
       position: fixed; top: 10px; left: 10px; right: 10px; z-index: 7;
@@ -791,7 +796,7 @@
   const SEV_KEYS = ['critical', 'serious', 'warning'];
   const STATUS_LABELS = ['Nowe', 'Potwierdzone', 'Wysłano ekipę', 'Zamknięte'];
   const AUTO_STATUS = { critical: [120, 420], serious: [300, 900], warning: [600, Infinity] }; // seconds until acknowledged, dispatched
-  const EVENTS_PER_DAY = 110;
+  const EVENTS_PER_DAY = 340; // ~18 active at any moment, so the map never looks empty
   const DUE_WINDOW = 90 * 60;
   const DUE_ROWS = 4;
   const GLYPHS = Object.fromEntries(TYPE_KEYS.map((k) => [k, new Path2D(EVENT_TYPES[k].glyph)]));
@@ -1713,8 +1718,9 @@
         menu.hidden = false;
         btn.setAttribute('aria-expanded', 'true');
         if (mobileMq.matches) setSheet('peek'); // the sheet would otherwise cover the menu
+        // Focus the first control for keyboard users, but not on a phone, where it would pop up the keyboard.
         const first = menu.querySelector('input, select, button');
-        if (first) first.focus({ preventScroll: true });
+        if (first && !mobileMq.matches) first.focus({ preventScroll: true });
       }
     });
     menus.push({ btn, menu, close });
