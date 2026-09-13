@@ -113,6 +113,7 @@
   .clock-time { font: 500 24px/1 var(--f-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
   .clock-date { font-size: 12.5px; color: var(--ink-2); }
   .clock-note { font-size: 12px; color: var(--ink-3); max-width: 36ch; }
+  .clock-speed { display: none; }
   .mode-chip {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 3px 8px 3px 7px; border-radius: 3px;
@@ -494,6 +495,25 @@
     .sheet-date { margin-bottom: 14px; font-size: 13px; color: var(--ink-2); }
     .sheet-time .timebar { display: grid; gap: 16px; }
     .sheet-time .time-controls { flex-wrap: wrap; }
+    /* The clock pill shows the speed and opens the time controls when tapped. */
+    .clock { display: flex; align-items: center; cursor: pointer; }
+    .clock:active { transform: scale(0.97); }
+    .clock-row { gap: 8px; }
+    .clock-speed {
+      display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 11px;
+      background: var(--signal); color: var(--signal-ink); font: 700 12px/1 var(--f-mono); white-space: nowrap;
+    }
+    .clock-speed[data-mode="live"] { font-family: var(--f-display); letter-spacing: 0.08em; }
+    .clock-speed[data-mode="paused"] { background: var(--control-hover); color: var(--ink); }
+    /* Finger-sized controls in the sheet's time tab. */
+    .sheet-time .live-btn { height: 44px; padding: 0 16px; }
+    .sheet-time .icon-btn { width: 44px; height: 44px; }
+    .sheet-time .speeds { flex: 1 1 100%; }
+    .sheet-time .speeds button { flex: 1; height: 42px; font-size: 14px; }
+    .sheet-time #time-slider { height: 44px; }
+    .sheet-time #time-slider::-webkit-slider-thumb { width: 28px; height: 28px; margin-top: -12px; }
+    .sheet-time #time-slider::-moz-range-thumb { width: 24px; height: 24px; }
+    .sheet-time .slider-ticks { font-size: 11px; }
   }
   @media (prefers-reduced-motion: reduce) {
     .mode-chip[data-mode="live"] .dot { animation: none; }
@@ -506,9 +526,10 @@
 
 <div class="dash" id="dash">
   <header class="topbar">
-    <div class="clock">
+    <div class="clock" id="clock">
       <div class="clock-row">
         <span class="clock-time" id="clock-time">--:--:--</span>
+        <span class="clock-speed" id="clock-speed" data-mode="replay">60×</span>
         <span class="mode-chip" id="mode-chip" data-mode="live"><i class="dot"></i><span id="mode-label">Na żywo</span></span>
       </div>
       <div class="clock-date" id="clock-date">&nbsp;</div>
@@ -1114,7 +1135,8 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   // ---------------------------------------------------------------- state
-  const time = { mode: 'live', playing: true, speed: 1, sim: Date.now(), last: performance.now() };
+  // Opens as a 60× replay from the current moment; "Na żywo" switches to real time.
+  const time = { mode: 'replay', playing: true, speed: 60, sim: Date.now(), last: performance.now() };
   const filters = { classes: [true, true, true], operator: -1, query: '', running: true, platform: true, events: Object.fromEntries(TYPE_KEYS.map((k) => [k, true])) };
   let queryFlags = null;
   let patternText = null;
@@ -1664,6 +1686,9 @@
     $('sheet-date').textContent = note.hidden ? $('clock-date').textContent : `${$('clock-date').textContent}. ${note.textContent}`;
     $('mode-chip').dataset.mode = time.mode;
     $('mode-label').textContent = time.mode === 'live' ? 'Na żywo' : time.playing ? `Odtwarzanie ${time.speed}×` : 'Pauza';
+    const speedChip = $('clock-speed');
+    speedChip.dataset.mode = time.mode === 'live' ? 'live' : time.playing ? 'replay' : 'paused';
+    speedChip.textContent = time.mode === 'live' ? 'NA ŻYWO' : time.playing ? `${time.speed}×` : 'Pauza';
     const minute = Math.floor(clock.sec / 60);
     if (!sliding) slider.value = String(minute);
     slider.style.setProperty('--pct', `${(minute / 1439) * 100}%`);
@@ -1678,6 +1703,8 @@
   slider.addEventListener('input', () => { scrubTo(+slider.value); });
   slider.addEventListener('change', () => { sliding = false; });
   slider.addEventListener('pointerup', () => { sliding = false; });
+  // A phone can cancel the drag (e.g. when it takes the gesture over); don't leave the slider detached from the clock.
+  slider.addEventListener('pointercancel', () => { sliding = false; });
 
   function syncControls() {
     $('live-btn').setAttribute('aria-pressed', String(time.mode === 'live'));
@@ -2537,12 +2564,23 @@
   // Phone layout switch: the clock controls move into the sheet's "Czas" tab and back.
   const timebar = document.querySelector('.timebar');
   const timebarHome = timebar.parentElement, timebarAfter = timebar.nextElementSibling;
+  // On a phone the clock pill is a button that opens the time controls.
+  const clockPill = $('clock');
+  const openTimeControls = () => { if (mobileMq.matches) showInSheet('time'); };
+  clockPill.addEventListener('click', openTimeControls);
+  clockPill.addEventListener('keydown', (ev) => {
+    if (mobileMq.matches && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); openTimeControls(); }
+  });
   function placeForViewport() {
     if (mobileMq.matches) {
       $('sheet-time').appendChild(timebar);
       setEventsCollapsed(false);
+      clockPill.setAttribute('role', 'button');
+      clockPill.setAttribute('tabindex', '0');
+      clockPill.setAttribute('aria-label', 'Zmień czas i prędkość');
     } else {
       timebarHome.insertBefore(timebar, timebarAfter);
+      for (const a of ['role', 'tabindex', 'aria-label']) clockPill.removeAttribute(a);
     }
   }
   mobileMq.addEventListener('change', () => { placeForViewport(); userMoved = false; resizeMap(); buildStrip(); });
