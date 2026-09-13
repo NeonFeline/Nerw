@@ -20,6 +20,9 @@ runs/
 # Rebuild with: uv run python dashboard/build_rail_data.py
 polish_trains/
 
+# Browser automation scratch output
+.playwright-mcp/
+
 # Python
 __pycache__/
 *.py[cod]
