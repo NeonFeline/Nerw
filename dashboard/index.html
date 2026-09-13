@@ -215,7 +215,8 @@
   .key .mk svg { width: 13px; height: 13px; }
 
   /* ------------------------------------------------------------ map */
-  .map-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+  /* minmax(0, 1fr) columns: without them a long header line sizes the panel and it spills over its neighbour. */
+  .map-panel { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .map-body { position: relative; overflow: hidden; background: var(--sea); border-radius: 0 0 6px 6px; }
   #map { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
   #map.dragging { cursor: grabbing; }
@@ -233,7 +234,7 @@
   .zoom .fit { font: 700 10px/1 var(--f-display); letter-spacing: 0.06em; text-transform: uppercase; }
 
   /* ------------------------------------------------------------ events */
-  .events { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+  .events { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
   .sev-counts { display: flex; gap: 12px; font-size: 12.5px; color: var(--ink-2); }
   .sev-counts span { display: inline-flex; align-items: center; gap: 5px; }
   .sev-counts i { width: 9px; height: 9px; border-radius: 2px; background: var(--sev); }
@@ -288,12 +289,14 @@
   .btn:hover:not(:disabled) { background: var(--control); }
   .btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
   .btn.primary:hover:not(:disabled) { background: var(--ink-2); }
-  .btn:disabled { opacity: 0.4; cursor: default; }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn.primary:disabled { background: transparent; color: var(--ink-2); border-color: var(--line-strong); }
+  .eta { white-space: nowrap; }
   .section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
   .section-head .count { font-size: 12px; color: var(--ink-3); text-align: right; }
   .due { list-style: none; margin: -4px 0 0; padding: 0; display: grid; gap: 1px; }
   .due-row {
-    width: 100%; display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 10px; align-items: center;
+    width: 100%; display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; align-items: center;
     padding: 6px; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer;
   }
   .due-row:hover { background: var(--control); }
@@ -328,7 +331,7 @@
   .log .t { font: 500 12px/1.4 var(--f-mono); color: var(--ink); }
 
   /* ------------------------------------------------------------ line view */
-  .line-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+  .line-panel { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
   .line-panel .panel-head h2 { white-space: nowrap; }
   .line-sub { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .line-status { font-size: 12.5px; color: var(--ink); text-align: right; white-space: nowrap; flex: none; }
@@ -394,8 +397,12 @@
     .map-body { height: 60vh; min-height: 320px; }
     .events-body { grid-template-rows: none; }
     .event-list { max-height: 300px; }
-    .line-panel { height: 240px; }
+    .line-panel { height: auto; }
+    .strip-scroll { height: 200px; }
     .timebar { flex-basis: 100%; flex-wrap: wrap; }
+    .map-panel .panel-head, .line-panel .panel-head { flex-wrap: wrap; row-gap: 6px; }
+    #map-summary, .line-sub { order: 10; flex-basis: 100%; white-space: normal; }
+    .line-status { white-space: normal; text-align: left; }
   }
   @media (prefers-reduced-motion: reduce) {
     .mode-chip[data-mode="live"] .dot { animation: none; }
@@ -1602,6 +1609,7 @@
       const n = due.id === focus.id ? due.list.length : 0;
       mapSummary.textContent = `${EVENT_TYPES[focus.type].label} · ${metres(eventMeta(focus).stationM)} od stacji ${eventMeta(focus).station} · nadjeżdżające w ciągu 90 min: ${n}`;
     } else mapSummary.textContent = summary;
+    mapSummary.title = mapSummary.textContent;
     mapSummary.classList.toggle('focused', !!focus);
     $('focus-exit').hidden = !focus;
     $('f-summary').textContent = summary;
@@ -1639,6 +1647,7 @@
   // keepMode: leave the axis under the map on the event line (used when picking a train from an event).
   function selectTrain(e, keepMode) {
     selectedTrain = e;
+    hideTooltip();
     if (e && !keepMode) stripMode = 'train';
     staticDirty = true;
     lastInteraction = 0;
@@ -1648,6 +1657,7 @@
   // opts.focus: the operator picked this event, so zoom to it and show only its track and due trains.
   function selectEvent(ev, opts = {}) {
     selectedEvent = ev;
+    hideTooltip();
     due = { id: null, at: 0, list: [], set: new Set() };
     $('detail-empty').hidden = !!ev;
     $('detail-body').hidden = !ev;
