@@ -22,6 +22,9 @@
 
 ---
 
+> 🎯 **Built at the [Baltic Dual Use Hackathon 2026](https://balticdualuse.eu/) in Gdańsk.**
+> This is our project from a 48-hour hackathon (11–13 September 2026, University of Gdańsk Library, Oliwa) about technologies with both civilian and defence applications, under the motto *"Shape the Security of Tomorrow"*. It is organised by the CODE:ME Foundation with the University of Gdańsk and Kainos, and covers space, AI, drones & robotics, quantum and microelectronics tracks. NERW is a dual-use AI system: the same fibre-optic sensing protects strategic rail corridors and civilian railways.
+
 ## 🚨 The problem
 
 In November 2025 a sabotage attack hit the Polish railway, and the media reported an explosive charge detonated on the tracks. Thousands of kilometres of strategic lines cannot be covered with CCTV: cameras are expensive and leave blind spots.
